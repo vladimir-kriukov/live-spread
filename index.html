@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>📡 Живой спред · MOEX vs Forex</title>
+<style>
+  body{margin:0;min-height:100vh;background:#0b0e14;color:#8b93a5;display:flex;flex-direction:column;
+    align-items:center;gap:14px;padding:28px 12px 40px;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+  h1{margin:0;font-size:15px;color:#e8ecf3}
+  #claude-lsh{position:static!important;width:min(420px,100%)!important}
+  .tok{width:min(420px,100%);background:#12161f;border:1px solid #2a3140;border-radius:10px;padding:10px 12px;box-sizing:border-box}
+  .tok summary{cursor:pointer;font-weight:700;color:#c3cad8;list-style:none;display:flex;justify-content:space-between;align-items:center}
+  .tok summary::-webkit-details-marker{display:none}
+  .tok .row{display:flex;gap:6px;margin-top:8px}
+  .tok input{flex:1;min-width:0;background:#0b0e14;border:1px solid #2a3140;border-radius:6px;color:#e8ecf3;padding:6px 8px;font:12px monospace}
+  .tok button{background:#1b2130;border:1px solid #2a3140;border-radius:6px;color:#e8ecf3;padding:6px 10px;cursor:pointer}
+  .tok button:hover{background:#242c3d}
+  .tok .st{margin-top:6px;font-size:11px;min-height:14px}
+  .tok .help{margin-top:8px;line-height:1.5;font-size:11px}
+  .tok .help a{color:#7aa2f7}
+  .ok{color:#30d158}.err{color:#e5484d}.warn{color:#e5c07b}
+  .note{max-width:420px;line-height:1.5;text-align:center;font-size:11px}
+</style></head><body>
+<h1>📡 Живой спред · MOEX vs Forex</h1>
+<!-- BEGIN: claude-live-spread-hud-block -->
+<!--
+  CLAUDE-LIVE-SPREAD-HUD-v1 — sidecar #13 (2026-07-13)
+  ═══════════════════════════════════════════════════════════════════════════
+  Проблема: TradingView показывает УСТАРЕВШИЙ спред; реальная раздвижка другая.
+  Решение: плавающая read-only плашка «📡 Живой спред», всегда поверх любой
+  вкладки, тикает из ТЕХ ЖЕ живых фидов, что уже кормят «Мои позиции»:
+    • MOEX  — window.__wsLivePrices[ticker] = {price,bid,ask,at,quoteAt}
+              (T-Invest WS, sub-second; наполняет docker proxy/realtime-inject.js)
+    • Forex — свой poll CT_BASE/ctrader-prices (реальные cTrader bid/ask, ~3.5с)
+  Headline (крупная цифра) = ИСПОЛНИМАЯ раздвижка (FILL-NOW), bid/ask-честная:
+    шорт-нога по bid, лонг по ask, форекс по пересекаемой стороне → «если залью
+    все ноги ПРЯМО СЕЙЧАС». Направление (Short/Buy) — по знаку MID (стабильный
+    референс, без chicken-and-egg). MID-число НЕ показываем (решение пользователя
+    2026-07-13) — оно в тултипе строки цен. Строка цен = 3 числа: leg1/leg2/fx.
+  + индикатор свежести по каждой ноге (🟢/🟡/🔴) + заморозка headline при
+    устаревании фида (⏸) + «Δ vs 🔄» (насколько устарел последний снапшот таба).
+  PURE READ-ONLY — кнопки заливки в таб («↧») и тумблер «🔴 LIVE» УБРАНЫ
+  (2026-07-13): HUD только показывает, табы не мутирует.
+
+  ЖИВЁТ как sidecar (BEGIN/END-маркеры) → reinject в «Мой Калькулятор.html»
+  через /update-all, как #6/#12. Снапшот НЕ трогаем (переживает bump Антона).
+  Инжектить ПОСЛЕ #6/#12 (чтобы __wsLivePrices уже наполнялся).
+  Читает цены ТОЛЬКО через public-хуки (__wsLivePrices + /ctrader-prices +
+  /?t= ISS-поллинг); НЕ трогает IIFE-local PERP_STATE/MODES/PF_LEGS (их нет на
+  window — см. память [[sidecar_globals_not_on_window]]).
+  Instrument-map — зеркало PERP_CONFIG@4492 + формулы calcPerp@6994: при смене
+  формулы у Антона свериться на /update-all.
+  ═══════════════════════════════════════════════════════════════════════════
+-->
+<style>
+  #claude-lsh{position:fixed;top:70px;right:12px;z-index:99998;width:360px;
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:12px;
+    background:var(--card,#12161f);border:1px solid var(--border,#2a3140);border-radius:10px;
+    box-shadow:0 6px 24px rgba(0,0,0,.45);color:var(--tw,#e8ecf3);overflow:hidden;user-select:none}
+  #claude-lsh .lsh-hd{display:flex;align-items:center;justify-content:space-between;
+    padding:7px 10px;background:var(--table-head,#1b2130);border-bottom:1px solid var(--border,#2a3140);
+    cursor:pointer;font-weight:700}
+  #claude-lsh .lsh-hd .lsh-title{display:flex;align-items:center;gap:6px}
+  #claude-lsh .lsh-hd .lsh-tools{display:flex;align-items:center;gap:8px;font-weight:400}
+  #claude-lsh .lsh-body{padding:4px 0}
+  #claude-lsh.lsh-collapsed .lsh-body{display:none}
+  #claude-lsh .lsh-row{padding:7px 10px;border-bottom:1px solid rgba(255,255,255,.05)}
+  #claude-lsh .lsh-row:last-child{border-bottom:none}
+  #claude-lsh .lsh-r1{display:flex;align-items:baseline;justify-content:space-between;gap:6px}
+  #claude-lsh .lsh-name{font-weight:700;color:var(--tm,#8b93a5);font-size:11px}
+  #claude-lsh .lsh-mid{font-size:17px;font-weight:800;font-variant-numeric:tabular-nums}
+  #claude-lsh .lsh-dots{display:flex;gap:3px;align-items:center;margin-left:auto}
+  #claude-lsh .lsh-dot{width:7px;height:7px;border-radius:50%;display:inline-block}
+  #claude-lsh .lsh-dir{font-size:10.5px;color:var(--tl,#c3cad8);margin-top:2px}
+  #claude-lsh .lsh-px{font-size:13px;color:var(--tw,#ffffff);margin-top:3px;font-weight:600;font-variant-numeric:tabular-nums;
+    cursor:pointer;display:flex;align-items:center;gap:5px;padding:1px 4px;margin-left:-4px;border-radius:4px;
+    transition:background .12s,color .12s}
+  #claude-lsh .lsh-arw{font-size:9px;font-weight:800;margin-left:1px}
+  #claude-lsh .lsh-pct{margin-left:auto;font-weight:800;font-size:13px;font-variant-numeric:tabular-nums}
+  #claude-lsh .lsh-px:hover{background:rgba(255,255,255,.09)}
+  #claude-lsh .lsh-px .lsh-cp{font-size:11px;font-weight:400;color:var(--tm,#8b93a5);opacity:.55;transition:opacity .12s}
+  #claude-lsh .lsh-px:hover .lsh-cp{opacity:1}
+  #claude-lsh .lsh-px.lsh-px-copied{background:rgba(48,209,88,.16);color:var(--green,#30d158)}
+  #claude-lsh .lsh-px.lsh-px-copied .lsh-cp{opacity:1;color:var(--green,#30d158)}
+  #claude-lsh .lsh-px.lsh-px-copied .lsh-cp::after{content:" ✓ скопировано"}
+  #claude-lsh .lsh-meta{margin-top:3px;font-size:9.5px;color:var(--tm,#8b93a5)}
+  #claude-lsh .lsh-dead{color:var(--tm,#8b93a5);font-style:italic;font-size:10.5px}
+  #claude-lsh .lsh-foot{padding:5px 10px;font-size:9px;color:var(--tm,#8b93a5);
+    border-top:1px solid var(--border,#2a3140)}
+</style>
+<div id="claude-lsh" class="lsh-collapsed" style="display:none">
+  <div class="lsh-hd">
+    <span class="lsh-title">📡 Живой спред</span>
+    <span class="lsh-tools">
+      <span class="lsh-caret">▸</span>
+    </span>
+  </div>
+  <div class="lsh-body"></div>
+  <div class="lsh-foot"></div>
+</div>
+<script>
+(function(){
+  if (window.__claudeLiveSpreadHudLoaded) return;
+  window.__claudeLiveSpreadHudLoaded = true;
+
+  var CT_BASE = 'https://arb-moex-proxy.klevtsov-anton.workers.dev'; // docker → /proxy/ctrader-prices
+  var REPAINT_MS = 1000, FX_POLL_MS = 1000, MOEX_POLL_MS = 3000;
+  var MOEX_FRESH_MS = 8000, MOEX_STALE_MS = 30000;   // green<8с (свой poll ~3с), yellow<30с, red/freeze>30с
+  // FX poll 1с (было 3.5с): /proxy/ctrader-prices — локальный direct-стрим cTrader (sub-second),
+  // так HUD-цена форекса совпадает с терминалом с точностью до ~1с (раньше отставала на 2-4 пипа).
+  var FX_FRESH_MS = 8000, FX_STALE_MS = 30000;       // green<3с (poll ~1с), yellow<30с, red/freeze>30с
+  var LS_KEY = 'claude_lsh_v1';
+
+  // Зеркало PERP_CONFIG@4492 + calcPerp@6994 (synthetic=leg1/leg2; spread=(synth−fx)/fx*100).
+  // Сверять на /update-all. v1 — валютные перп-тройки; v2 (2026-08-06) — квартальный
+  // тройничок Si/Cr (calcTriple@6372: synthetic=(Si/1000)/CR): l1div — нормировка l1,
+  // snap — id инпутов таба для Δ vs 🔄. ⚠ ФРОНТ-КОНТРАКТЫ ОБНОВЛЯТЬ РУКАМИ при перекладке.
+  // 2026-08-28: U6 → Z6 (Si-12.26 / CNY-12.26, экспирация 17.12.2026) — юзер уже перевернулся
+  // в Z6 27.08, а HUD ещё смотрел на SiU6/CRU6 (экспирация 17.09) и показывал чужой спред.
+  // Следующая перекладка — к марту: Z6 → H7.
+  var PERPS = window.LSH_PERPS = [
+    { key:'PERP_UCNH', prefix:'pu', short:'UC · USDRUBF/CNYRUBF', l1:'USDRUBF', l2:'CNYRUBF', fx:'USD/CNH' },
+    { key:'PERP_ECNH', prefix:'pe', short:'EC · EURRUBF/CNYRUBF', l1:'EURRUBF', l2:'CNYRUBF', fx:'EUR/CNH' },
+    { key:'PERP_EU',   prefix:'pr', short:'EU · EURRUBF/USDRUBF', l1:'EURRUBF', l2:'USDRUBF', fx:'EUR/USD' },
+    { key:'TRIPLE',    prefix:'tr', short:'Si/Cr · SiZ6/CRZ6',    l1:'SiZ6',    l2:'CRZ6',    fx:'USD/CNH',
+      l1div:1000, snap:['trSi','trCr','trFx'] }
+  ];
+
+  var fxCache = {};            // symbol -> {bid,ask,at}
+  var moexPoll = {};           // ticker -> {bid,ask,last,at} — свой активный ISS-поллинг (floor свежести)
+  // 2026-08-03: экспорт ISS-кэша для №6 (realtime-price-sync) — «Тек. цена» MOEX-ног
+  // берёт freshest(WS, этот кэш), тот же источник, что HUD (иначе при замирании WS
+  // портфель стоял на последнем WS-тике, а HUD уезжал вперёд на ISS-полле ~3с).
+  window.__claudeHudMoexPoll = moexPoll;
+  // 2026-08-07: экспорт fx-кэша для №12 (portfolio-fx-exit) — «один источник»: форекс-цены
+  // портфеля берутся из ЭТОГО полла, №12 фетчит сам только пары вне PERPS (металлы).
+  // Значения СЫРЫЕ (без FX_MARKUP) — наценку каждый потребитель применяет своей стороной.
+  window.__claudeHudFxPoll = fxCache;
+  var fxInFlight = false, moexInFlight = false;  // guard: не наслаивать медленные запросы
+  var el = document.getElementById('claude-lsh');
+  if (!el) return;
+  var body = el.querySelector('.lsh-body');
+  var foot = el.querySelector('.lsh-foot');
+  var caret = el.querySelector('.lsh-caret');
+
+  function tickerToXp(t){ return t.replace(/\//g,'').toUpperCase() + '_xp'; }
+  function inpVal(id){ var e = document.getElementById(id); if(!e) return 0; return +String(e.value).replace(/\s/g,'') || 0; }
+
+  // ── MOEX-нога: WS-книга ПРИОРИТЕТНА, ISS-полл только fallback ────────────
+  // 2026-08-12 (репорт пользователя «HUD прыгает на статичном стакане»): ISS
+  // BID/OFFER — отстающий снапшот (обновляется раз в ~10с, расходится с живым
+  // стаканом на тики), а его at = время ОТВЕТА полла → старый «freshest wins»
+  // устраивал пинг-понг WS↔ISS и % мигал на ровном месте. Теперь: живой стакан
+  // T-Invest (WS) всегда первый; полл — когда WS молчит >30с; WS last — крайний.
+  function moexLeg(ticker){
+    var now = Date.now();
+    var q = (window.__wsLivePrices || {})[ticker];
+    if (q){
+      var quoteAge = q.quoteAt ? (now - q.quoteAt) : Infinity;
+      if (quoteAge <= MOEX_STALE_MS && q.bid > 0 && q.ask > 0)
+        return { mid:(q.bid+q.ask)/2, bid:q.bid, ask:q.ask, ageMs:quoteAge, book:true };
+    }
+    var pp = moexPoll[ticker];
+    if (pp){
+      var pAge = now - pp.at;
+      if (pAge <= MOEX_STALE_MS){
+        if (pp.bid > 0 && pp.ask > 0) return { mid:(pp.bid+pp.ask)/2, bid:pp.bid, ask:pp.ask, ageMs:pAge, book:true };
+        if (pp.last > 0)              return { mid:pp.last, bid:pp.last, ask:pp.last, ageMs:pAge, book:false };
+      }
+    }
+    if (q && q.at && (now - q.at) <= MOEX_STALE_MS && q.price > 0)
+      return { mid:q.price, bid:q.price, ask:q.price, ageMs:now - q.at, book:false };
+    return null;
+  }
+  // ── Forex-нога из cTrader poll ───────────────────────────────────────────
+  // FX_MARKUP (2026-08-07, по просьбе пользователя): raw top-of-book Open API НЕ несёт
+  // наценку брокера (XPBee торгует хуже сырого стакана, см. [[ctrader-raw-vs-terminal-spread]]).
+  // Котировку делаем на 0.0002 ХУЖЕ в сторону сделки: Buy(bid)+markup, Sell(ask)−markup —
+  // % строк A/B и FILL-NOW считаются от исполнимых цен. MID остаётся сырым (референс = график).
+  var FX_MARKUP = 0.0002;
+  // 2026-08-07: cTrader шлёт спот ТОЛЬКО при изменении цены → на тихом рынке тик USDCNH
+  // стареет на 20-60с при живом стриме (EURUSD в том же ответе тикает суб-секундно).
+  // Если стрим жив (хоть один символ тикал <5с) — старый тик значит «цена НЕ МЕНЯЛАСЬ»:
+  // котировка валидна, точку не желтим и FILL не морозим; реальный возраст тика — в meta.
+  var fxStreamAliveAt = 0;
+  function fxLeg(sym){
+    var q = fxCache[sym];
+    if (!q) return null;
+    var now = Date.now(), age = now - q.at;
+    var tickAge = age;
+    if ((now - fxStreamAliveAt) < 15000 && age > FX_FRESH_MS) age = FX_FRESH_MS - 1;
+    return { mid:(q.bid+q.ask)/2, bid:q.bid + FX_MARKUP, ask:q.ask - FX_MARKUP, ageMs:age, tickAge:tickAge, book:true };
+  }
+
+  // fetch С ТАЙМАУТОМ — обязателен для обоих поллов (фикс 2026-08-25).
+  // Оба цикла защёлкиваются флагом *InFlight, чтобы не наслаивать запросы. Но голый fetch
+  // может ВИСЕТЬ БЕСКОНЕЧНО (сервер принял соединение и не ответил — например /proxy/ctrader-prices
+  // ждёт протобуф-ответ от cTrader, а тот отвалился по DNS: `getaddrinfo ENOTFOUND
+  // live.ctraderapi.com`). Тогда ни .catch, ни .finally не срабатывают, флаг остаётся true
+  // НАВСЕГДА и поллинг мёртв до перезагрузки страницы.
+  // Симптом, по которому это поймали: у MOEX есть второй источник (__wsLivePrices), поэтому
+  // ноги оставались зелёными и «WS 24 тик» бодрым, а у форекса второго источника НЕТ — все
+  // строки разом ушли в «форекс-котировки нет · cTrader —» при полностью живом бэкенде
+  // (curl к /proxy/ctrader-prices отдавал свежие bid/ask с ageMs<1с). Асимметрия и выдала латч.
+  // С таймаутом запрос обрывается, флаг снимается, следующий тик пробует снова → само
+  // восстанавливается, как только сервер ожил.
+  function fetchT(url, ms){
+    var ctl = (typeof AbortController === 'function') ? new AbortController() : null;
+    var t = setTimeout(function(){ if (ctl) ctl.abort(); }, ms);
+    return fetch(url, ctl ? { signal: ctl.signal } : undefined)
+      .finally(function(){ clearTimeout(t); });
+  }
+
+  function pollFx(){ return; // standalone: данные пишет внешний слой (template.html)
+    if (fxInFlight) return;                    // не наслаивать медленный /ctrader-prices
+    var seen = {}, uniq = [];
+    PERPS.forEach(function(p){ var s=tickerToXp(p.fx); if(!seen[s]){ seen[s]=1; uniq.push(s); } });
+    fxInFlight = true;
+    fetchT(CT_BASE + '/ctrader-prices?symbols=' + encodeURIComponent(uniq.join(',')), 4000)
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        var px = j && j.prices; if (!px) return;
+        var now = Date.now();
+        PERPS.forEach(function(p){
+          var q = px[tickerToXp(p.fx)];
+          if (q && typeof q.bid==='number' && typeof q.ask==='number' && q.bid>0 && q.ask>0){
+            // at = время РЕАЛЬНОГО тика (now − ageMs стрима), НЕ время ответа: cTrader шлёт спот
+            // только на изменение цены, поэтому на тихом рынке тик может быть старым. Честный
+            // возраст → корректная свежесть-точка и заморозка FILL-NOW (иначе HUD показывал бы
+            // устаревшую цену как «свежую», отсюда расхождение с терминалом).
+            var tickAt = (typeof q.ageMs === 'number') ? (now - q.ageMs) : now;
+            if (typeof q.ageMs === 'number' && q.ageMs < 5000) fxStreamAliveAt = now;
+            fxCache[p.fx] = { bid:q.bid, ask:q.ask, at:tickAt };
+          }
+        });
+      })
+      .catch(function(){ /* сеть/CORS — тихо, ноги протухнут по возрасту */ })
+      .finally(function(){ fxInFlight = false; });
+  }
+
+  function pollMoex(){ return; // standalone: данные пишет внешний слой (template.html)
+    if (moexInFlight) return;
+    var tks = {}; PERPS.forEach(function(p){ tks[p.l1]=1; tks[p.l2]=1; });
+    var list = Object.keys(tks);
+    moexInFlight = true;
+    // CT_BASE + '/?t=' → docker переписывает воркер-URL на /proxy → /proxy/?t= (direct ISS + T-Invest overlay);
+    // вне docker → сам воркер (тот же формат ответа, что жуёт fetchPrices@8694).
+    fetchT(CT_BASE + '/?t=' + encodeURIComponent(list.join(',')), 8000)
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (!d || !d.marketdata || !d.marketdata.columns) return;
+        var mc = d.marketdata.columns, mr = d.marketdata.data;
+        var iId=mc.indexOf('SECID'), iLast=mc.indexOf('LAST'), iBid=mc.indexOf('BID'),
+            iOff=mc.indexOf('OFFER'), iSet=mc.indexOf('SETTLEPRICE');
+        var now = Date.now();
+        mr.forEach(function(row){
+          var id = iId>=0?row[iId]:null; if (!id || !tks[id]) return;
+          var bid = iBid>=0?(+row[iBid]||0):0, ask = iOff>=0?(+row[iOff]||0):0;
+          var last = (iLast>=0?(+row[iLast]||0):0) || (iSet>=0?(+row[iSet]||0):0);
+          if (bid>0 && ask>0)      moexPoll[id] = { bid:bid, ask:ask, last:last||(bid+ask)/2, at:now };
+          else if (last>0)          moexPoll[id] = { bid:0, ask:0, last:last, at:now };
+        });
+      })
+      .catch(function(){ /* нет docker/сети — WS-путь остаётся, иначе строка «нет фида» */ })
+      .finally(function(){ moexInFlight = false; });
+  }
+
+  function computeRow(p){
+    var l1 = moexLeg(p.l1), l2 = moexLeg(p.l2), fx = fxLeg(p.fx);
+    var out = { l1:l1, l2:l2, fx:fx, ok:false };
+    if (!l1 || !l2 || !fx) return out;
+    out.ok = true;
+    var k = p.l1div || 1;   // нормировка l1 (Si котируется ₽ за $1000 → ÷1000)
+    var synMid = l1.mid / k / l2.mid;
+    out.synth = synMid;
+    out.spMid = (synMid - fx.mid) / fx.mid * 100;
+    // FILL: пользователь — МЕЙКЕР (лимитки, НЕ по рынку): Short → ask, Buy → bid.
+    // spMid≥0: Short l1(ask) · Buy l2(bid) · Buy FX(bid);  spMid<0: Buy l1(bid) · Short l2(ask) · Short FX(ask).
+    var synFill, fxFill;
+    if (out.spMid >= 0){
+      synFill = l1.ask / k / l2.bid; fxFill = fx.bid;
+    } else {
+      synFill = l1.bid / k / l2.ask; fxFill = fx.ask;
+    }
+    out.spFill = (synFill - fxFill) / fxFill * 100;
+    // % каждой стороны = значение копируемой формулы (l1/l2/fx−1)*100 по её лимитным ценам:
+    //  A: Short l1(ask)/Buy l2(bid)/Buy FX(bid);  B: Buy l1(bid)/Sell l2(ask)/Sell FX(ask).
+    out.spA = (l1.ask / k / l2.bid / fx.bid - 1) * 100;
+    out.spB = (l1.bid / k / l2.ask / fx.ask - 1) * 100;
+    // Обе стороны сделки рендерятся из row.l1/l2/fx .bid/.ask напрямую (см. render).
+    // снапшот-спред из инпутов таба (последний fetchPrices / клик 🔄)
+    var ids = p.snap || [p.prefix+'L1', p.prefix+'L2', p.prefix+'Fx'];
+    var sL1 = inpVal(ids[0]), sL2 = inpVal(ids[1]), sFx = inpVal(ids[2]);
+    out.spSnap = (sL1>0 && sL2>0 && sFx>0) ? ((sL1/k/sL2 - sFx)/sFx*100) : null;
+    out.stale = (l1.ageMs > MOEX_STALE_MS) || (l2.ageMs > MOEX_STALE_MS) || (fx.ageMs > FX_STALE_MS);
+    out.maxAge = Math.max(l1.ageMs, l2.ageMs, fx.ageMs);
+    return out;
+  }
+
+  function dotColor(leg, isFx){
+    if (!leg) return 'var(--red,#e5484d)';
+    var fresh = isFx ? FX_FRESH_MS : MOEX_FRESH_MS;
+    var stale = isFx ? FX_STALE_MS : MOEX_STALE_MS;
+    if (leg.ageMs <= fresh) return 'var(--green,#30d158)';
+    if (leg.ageMs <= stale) return 'var(--yellow,#e5c07b)';
+    return 'var(--red,#e5484d)';
+  }
+  function fmtAge(ms){ var s = ms/1000; return s < 90 ? (s<10 ? s.toFixed(1)+'с' : Math.round(s)+'с') : Math.round(s/60)+'м'; }
+  function sp(v){ return (v>=0?'+':'') + v.toFixed(3) + '%'; }
+  function px(v){ return v>=1000 ? v.toFixed(0) : v>=100 ? v.toFixed(2) : v>=10 ? v.toFixed(3) : v.toFixed(5); }
+  // Стрелка направления возле цены: buy=↑ зелёная, sell=↓ красная.
+  function arw(buy){ return '<span class="lsh-arw" style="color:'+(buy?'var(--green,#30d158)':'var(--red,#e5484d)')+'">'+(buy?'↑':'↓')+'</span>'; }
+  // % строки (= значение копируемой формулы), справа, цвет по знаку; ⏸ при устаревшем фиде.
+  function pctSpan(v, stale){
+    var c = stale ? 'var(--red,#e5484d)' : (v>=0 ? 'var(--green,#30d158)' : 'var(--orange,#f5a623)');
+    return '<span class="lsh-pct" style="color:'+c+'">'+(stale?'⏸':'')+sp(v)+'</span>';
+  }
+
+  function copyToClipboard(text){
+    if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text).catch(()=>execCopy(text));
+    return Promise.resolve(execCopy(text));
+  }
+  function execCopy(text){
+    try { var ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.opacity='0';
+      document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); } catch(e){}
+  }
+  // Клик по строке цен → копирует в буфер ФОРМУЛУ спреда «(l1 / l2 / fx-1)*100»
+  // (read-only, БЕЗ вставки в калькулятор — пользователь вставляет сам). На экране
+  // строка остаётся просто «l1 / l2 / fx». Вспышка ✓ подтверждает копирование.
+  function copyRow(elem){
+    var f = elem && elem.getAttribute('data-copy');
+    if (!f) return;
+    copyToClipboard(f);
+    elem.classList.add('lsh-px-copied'); setTimeout(function(){ elem.classList.remove('lsh-px-copied'); }, 900);
+  }
+
+  function render(){
+    var rowsHtml = '';
+    var anyLive = false, allFresh = true;
+    for (var i=0;i<PERPS.length;i++){
+      var p = PERPS[i], row = computeRow(p);
+      var d1 = dotColor(row.l1,false), d2 = dotColor(row.l2,false), df = dotColor(row.fx,true);
+      var dots = '<span class="lsh-dots" title="свежесть: '+p.l1+' / '+p.l2+' / '+p.fx+'">'
+        + '<span class="lsh-dot" style="background:'+d1+'"></span>'
+        + '<span class="lsh-dot" style="background:'+d2+'"></span>'
+        + '<span class="lsh-dot" style="background:'+df+'"></span></span>';
+      if (!row.ok){
+        var miss = [];
+        if (!row.l1 || !row.l2) miss.push('MOEX: нет данных — введи токен T-Invest ниже');
+        if (!row.fx) miss.push('форекс: нет данных (TradingView)');
+        rowsHtml += '<div class="lsh-row"><div class="lsh-r1"><span class="lsh-name">'+p.short+'</span>'+dots+'</div>'
+          + '<div class="lsh-dead">'+ (miss.join(' · ') || 'нет данных') +'</div></div>';
+        allFresh = false;
+        continue;
+      }
+      anyLive = true;
+      if (row.stale) allFresh = false;
+      // Обе стороны сделки, цены по ЛИМИТКАМ (Short→ask, Buy→bid), со стрелками + своим %:
+      //  A: Short l1 (ask↓) · Buy l2 (bid↑) · Buy FX (bid↑)
+      //  B: Buy l1 (bid↑) · Sell l2 (ask↓) · Sell FX (ask↓)
+      var rowA = px(row.l1.ask)+arw(0)+' / '+px(row.l2.bid)+arw(1)+' / '+px(row.fx.bid)+arw(1);
+      var rowB = px(row.l1.bid)+arw(1)+' / '+px(row.l2.ask)+arw(0)+' / '+px(row.fx.ask)+arw(0);
+      // Формула копирования зашита в data-copy из ТЕХ ЖЕ цен, что показаны → «что вижу, то копирую».
+      // Для квартальных троек (l1div>1) в формулу входит нормировка «/ 1000» — цены остаются биржевыми.
+      var dv = (p.l1div && p.l1div !== 1) ? ' / '+p.l1div : '';
+      var copyA = '('+px(row.l1.ask)+dv+' / '+px(row.l2.bid)+' / '+px(row.fx.bid)+'-1)*100';
+      var copyB = '('+px(row.l1.bid)+dv+' / '+px(row.l2.ask)+' / '+px(row.fx.ask)+'-1)*100';
+      var pxA = '<div class="lsh-px" data-copy="'+copyA+'" title="Short '+p.l1+' ↓ask · Buy '+p.l2+' ↑bid · Buy FX ↑bid (лимитки). % = (l1/l2/fx-1)*100. Клик — копировать.">'+rowA+' <span class="lsh-cp">⎘</span>'+pctSpan(row.spA,row.stale)+'</div>';
+      var pxB = '<div class="lsh-px" data-copy="'+copyB+'" title="Buy '+p.l1+' ↑bid · Sell '+p.l2+' ↓ask · Sell FX ↓ask (лимитки). % = (l1/l2/fx-1)*100. Клик — копировать.">'+rowB+' <span class="lsh-cp">⎘</span>'+pctSpan(row.spB,row.stale)+'</div>';
+      var deltaTxt = (row.spSnap!=null)
+        ? 'Δ vs 🔄 '+((row.spMid-row.spSnap)>=0?'+':'')+(row.spMid-row.spSnap).toFixed(3)+'пп'
+        : '';
+      rowsHtml += '<div class="lsh-row">'
+        + '<div class="lsh-r1"><span class="lsh-name">'+p.short+'</span>'+dots+'</div>'
+        + pxA + pxB
+        + '<div class="lsh-meta">'+deltaTxt+' · '+fmtAge(row.maxAge)
+        + (row.fx && row.fx.tickAge > FX_FRESH_MS ? ' · fx-тик '+fmtAge(row.fx.tickAge)+' (цена не менялась)' : '')
+        + '</div>'
+        + '</div>';
+    }
+    body.innerHTML = rowsHtml;
+    // клик по строке цен → копировать 3 цены в буфер (read-only)
+    var pxEls = body.querySelectorAll('.lsh-px[data-copy]');
+    for (var b=0;b<pxEls.length;b++){
+      pxEls[b].addEventListener('click', function(){ copyRow(this); });
+    }
+    // футер-статус
+    var wsN = Object.keys(window.__wsLivePrices||{}).length;
+    foot.textContent = (anyLive ? (allFresh?'🟢 live':'🟡 частично устарело') : '🔴 нет фида')
+      + ' · MOEX T-Invest · Forex TradingView '+(Object.keys(fxCache).length?'ok':'—');
+  }
+
+  // ── UI: collapse ─────────────────────────────────────────────────────────
+  function loadState(){ try { return JSON.parse(localStorage.getItem(LS_KEY)||'{}'); } catch(e){ return {}; } }
+  function saveState(s){ try { localStorage.setItem(LS_KEY, JSON.stringify(s)); } catch(e){} }
+  var st = loadState();
+  function applyCollapsed(c){ el.classList.toggle('lsh-collapsed', c); caret.textContent = c?'▸':'▾'; }
+  applyCollapsed(!!st.collapsed);   // по умолчанию развёрнут; свёрнутость помнится в localStorage
+  el.querySelector('.lsh-hd').addEventListener('click', function(){
+    var c = !el.classList.contains('lsh-collapsed');
+    applyCollapsed(c); st.collapsed = c; saveState(st);
+  });
+
+  el.style.display = '';
+  pollFx();   setInterval(pollFx, FX_POLL_MS);
+  pollMoex(); setInterval(pollMoex, MOEX_POLL_MS);
+  render();
+  setInterval(render, REPAINT_MS);
+
+  // Возврат на вкладку — сбрасываем латчи и поллим сразу (фикс 2026-08-25, в пару к fetchT).
+  // Chrome ФРИЗИТ скрытые вкладки (Page Lifecycle) и может выбросить in-flight fetch, НЕ
+  // отклонив промис: .finally не срабатывает, *InFlight остаётся true и поллинг мёртв до
+  // перезагрузки. Таймаут в fetchT это разруливает, но только на следующем тике — здесь
+  // восстанавливаемся мгновенно, как только пользователь вернулся смотреть на спред.
+  // Тот же приём уже применён в сайдкаре №12 по той же причине.
+  ['visibilitychange','focus','pageshow'].forEach(function(ev){
+    window.addEventListener(ev, function(){
+      if (document.visibilityState === 'hidden') return;
+      fxInFlight = false; moexInFlight = false;
+      pollFx(); pollMoex();
+    });
+  });
+
+  window.claudeLiveSpreadStats = function(){
+    return { fxCache:fxCache, ws:Object.keys(window.__wsLivePrices||{}),
+             fxInFlight:fxInFlight, moexInFlight:moexInFlight, fxStreamAliveAt:fxStreamAliveAt };
+  };
+  console.log('[claude-live-spread-hud] v1 started — read-only HUD, repaint '+REPAINT_MS+'мс, fx poll '+FX_POLL_MS+'мс');
+})();
+</script>
+<!-- END: claude-live-spread-hud-block -->
+<details class="tok" id="tok">
+  <summary><span>🔑 Токен T-Invest для котировок MOEX</span><span id="tokBadge" class="warn">не задан</span></summary>
+  <div class="row">
+    <input id="tokInp" type="password" placeholder="t.xxxxxxxx… (только для чтения)" autocomplete="off" spellcheck="false">
+    <button id="tokEye" title="показать/скрыть" type="button">👁</button>
+    <button id="tokSave" type="button">Сохранить</button>
+    <button id="tokDel" type="button" title="удалить токен из этого браузера">✕</button>
+  </div>
+  <div class="st" id="tokSt"></div>
+  <div class="help">
+    Токен хранится <b>только в этом браузере</b> (localStorage) и отправляется только на
+    <code>invest-public-api.tinkoff.ru</code>. Получить: Т-Инвестиции → Настройки →
+    <a href="https://www.tbank.ru/invest/settings/api/" target="_blank" rel="noopener">Токены API</a>
+    → «Только для чтения». Без токена строки MOEX пустые; форекс работает всегда.
+  </div>
+</details>
+<p class="note">MOEX bid/ask — T-Invest API (ваш токен, ~2 с). Forex — TradingView <code>FX_IDC</code>
+(USD/CNH, EUR/USD; EUR/CNH = кросс), ~2 с. Клик по строке цен копирует формулу спреда.
+Страница статическая: своего сервера нет, ключи никуда не уходят.</p>
+<script>
+(function(){
+  var PERPS = window.LSH_PERPS, moex = window.__claudeHudMoexPoll, fx = window.__claudeHudFxPoll;
+  if (!PERPS || !moex || !fx) { console.error('[lsh-data] HUD не инициализирован'); return; }
+  var POLL_MS = 2000;
+  var TI = 'https://invest-public-api.tinkoff.ru/rest/tinkoff.public.invest.api.contract.v1.';
+  var TV = 'https://scanner.tradingview.com/forex/scan';
+  var LS_TOKEN = 'lsh_tinvest_token', LS_UIDS = 'lsh_tinvest_uids_v1';
+  var $ = function(id){ return document.getElementById(id); };
+  var token = '', uids = {}, tiInFlight = false, tvInFlight = false, tiBackoffUntil = 0;
+  try { token = localStorage.getItem(LS_TOKEN) || ''; uids = JSON.parse(localStorage.getItem(LS_UIDS) || '{}'); } catch(e){}
+
+  function fetchT(url, opt, ms){
+    var ctl = new AbortController(); var t = setTimeout(function(){ ctl.abort(); }, ms);
+    opt = opt || {}; opt.signal = ctl.signal;
+    return fetch(url, opt).finally(function(){ clearTimeout(t); });
+  }
+  function ti(method, body){
+    return fetchT(TI + method, { method:'POST', headers:{ 'content-type':'application/json', 'Authorization':'Bearer ' + token },
+      body: JSON.stringify(body) }, 6000).then(function(r){
+        if (r.status === 429){ tiBackoffUntil = Date.now() + 15000; throw new Error('429 лимит T-Invest, пауза 15 с'); }
+        if (r.status === 401){ throw new Error('401 токен отклонён'); }
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      });
+  }
+  function q2n(q){ return q ? ((+q.units || 0) + (+q.nano || 0) / 1e9) : 0; }
+
+  // ── токен: форма ────────────────────────────────────────────────────────
+  function badge(txt, cls){ var b = $('tokBadge'); b.textContent = txt; b.className = cls || ''; }
+  function st(txt, cls){ var s = $('tokSt'); s.textContent = txt; s.className = 'st ' + (cls || ''); }
+  function applyToken(t, persist){
+    token = t || '';
+    if (persist){ try { token ? localStorage.setItem(LS_TOKEN, token) : localStorage.removeItem(LS_TOKEN); } catch(e){} }
+    $('tokInp').value = token;
+    if (!token){ badge('не задан', 'warn'); $('tok').open = true; return; }
+    badge('проверяю…', 'warn');
+    ti('UsersService/GetInfo', {}).then(function(j){
+      badge('✓ тариф ' + (j.tariff || '?'), 'ok'); st('Токен принят. Котировки MOEX пойдут через пару секунд.', 'ok'); $('tok').open = false;
+      tiBackoffUntil = 0; pollMoex();
+    }).catch(function(e){
+      badge('ошибка', 'err'); $('tok').open = true;
+      // «Failed to fetch» при верном токене = браузер не доверяет сертификату T-Bank: цепочка
+      // invest-public-api.tinkoff.ru подписана Russian Trusted Root CA (Минцифры), его нет в
+      // системных хранилищах macOS/Windows/Chrome по умолчанию (в Яндекс Браузере — есть).
+      st(/Failed to fetch|NetworkError/i.test(e.message)
+        ? 'Сеть/сертификат: браузер не доверяет сертификату T-Bank (УЦ Минцифры). Установите корневой сертификат с gosuslugi.ru/crt или откройте страницу в Яндекс Браузере.'
+        : e.message, 'err');
+    });
+  }
+  $('tokSave').addEventListener('click', function(){ applyToken($('tokInp').value.trim(), true); });
+  $('tokInp').addEventListener('keydown', function(ev){ if (ev.key === 'Enter') applyToken($('tokInp').value.trim(), true); });
+  $('tokDel').addEventListener('click', function(){ applyToken('', true); st('Токен удалён из браузера.', 'warn'); });
+  $('tokEye').addEventListener('click', function(){ var i = $('tokInp'); i.type = i.type === 'password' ? 'text' : 'password'; });
+
+  // ── MOEX: T-Invest GetOrderBook depth=1 (bid/ask/last одним вызовом; лимит 600/мин) ──
+  function resolveUid(ticker){
+    if (uids[ticker]) return Promise.resolve(uids[ticker]);
+    return ti('InstrumentsService/FutureBy', { idType:'INSTRUMENT_ID_TYPE_TICKER', classCode:'SPBFUT', id:ticker })
+      .then(function(j){
+        var uid = j && j.instrument && j.instrument.uid; if (!uid) throw new Error('нет uid для ' + ticker);
+        uids[ticker] = uid; try { localStorage.setItem(LS_UIDS, JSON.stringify(uids)); } catch(e){}
+        return uid;
+      });
+  }
+  function pollMoex(){
+    if (!token || tiInFlight || Date.now() < tiBackoffUntil) return;
+    var tks = {}; PERPS.forEach(function(p){ tks[p.l1] = 1; tks[p.l2] = 1; });
+    tiInFlight = true;
+    Promise.all(Object.keys(tks).map(function(t){
+      return resolveUid(t).then(function(uid){ return ti('MarketDataService/GetOrderBook', { instrumentId:uid, depth:1 }); })
+        .then(function(j){
+          var bid = q2n(j.bids && j.bids[0] && j.bids[0].price), ask = q2n(j.asks && j.asks[0] && j.asks[0].price), last = q2n(j.lastPrice);
+          var now = Date.now();
+          if (bid > 0 && ask > 0) moex[t] = { bid:bid, ask:ask, last:last || (bid + ask) / 2, at:now };
+          else if (last > 0)      moex[t] = { bid:0, ask:0, last:last, at:now };   // сессия закрыта — только last
+        });
+    })).then(function(){ if ($('tokSt').className.indexOf('err') >= 0) st('', ''); })
+      .catch(function(e){ st('MOEX: ' + e.message, 'err'); })
+      .finally(function(){ tiInFlight = false; });
+  }
+
+  // ── Forex: TradingView scanner, FX_IDC (composite ≈ cTrader XPBee до 1 пипа) ─
+  // EUR/CNH у FX_IDC широкий (~16 пип против ~3 у брокера) → считаем кроссом EURUSD×USDCNH.
+  // ponytail: кросс = модель; если брокер котирует EURCNH напрямую шире — добавить FX_IDC:EURCNH.
+  var TV_SYM = { 'USD/CNH':'FX_IDC:USDCNH', 'EUR/USD':'FX_IDC:EURUSD' };
+  function pollFx(){
+    if (tvInFlight) return;
+    tvInFlight = true;
+    // Без content-type: TV разрешает в preflight только Referer/Accept, а POST с text/plain — «простой» запрос без preflight.
+    fetchT(TV, { method:'POST',
+      body: JSON.stringify({ symbols:{ tickers:Object.keys(TV_SYM).map(function(k){ return TV_SYM[k]; }) }, columns:['bid','ask'] }) }, 6000)
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        var now = Date.now(), got = {};
+        (j.data || []).forEach(function(row){
+          var pair = Object.keys(TV_SYM).filter(function(k){ return TV_SYM[k] === row.s; })[0];
+          var bid = +row.d[0], ask = +row.d[1];
+          if (pair && bid > 0 && ask >= bid){ got[pair] = { bid:bid, ask:ask, at:now }; fx[pair] = got[pair]; }
+        });
+        var u = got['USD/CNH'], e = got['EUR/USD'];
+        if (u && e) fx['EUR/CNH'] = { bid:e.bid * u.bid, ask:e.ask * u.ask, at:now };
+      })
+      .catch(function(){ /* сеть — ноги протухнут по возрасту */ })
+      .finally(function(){ tvInFlight = false; });
+  }
+
+  applyToken(token, false);
+  pollFx(); setInterval(pollFx, POLL_MS);
+  pollMoex(); setInterval(pollMoex, POLL_MS);
+  ['visibilitychange','focus','pageshow'].forEach(function(ev){
+    window.addEventListener(ev, function(){
+      if (document.visibilityState === 'hidden') return;
+      tiInFlight = false; tvInFlight = false; pollFx(); pollMoex();
+    });
+  });
+  window.lshDataStats = function(){ return { hasToken:!!token, uids:uids, moex:moex, fx:fx, tiBackoffUntil:tiBackoffUntil }; };
+})();
+</script>
+</body></html>

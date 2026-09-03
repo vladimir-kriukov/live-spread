@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>📡 Живой спред · MOEX vs Forex</title>
+<style>
+  body{margin:0;min-height:100vh;background:#0b0e14;color:#8b93a5;display:flex;flex-direction:column;
+    align-items:center;gap:14px;padding:28px 12px 40px;font:12px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+  h1{margin:0;font-size:15px;color:#e8ecf3}
+  #claude-lsh{position:static!important;width:min(420px,100%)!important}
+  .tok{width:min(420px,100%);background:#12161f;border:1px solid #2a3140;border-radius:10px;padding:10px 12px;box-sizing:border-box}
+  .tok summary{cursor:pointer;font-weight:700;color:#c3cad8;list-style:none;display:flex;justify-content:space-between;align-items:center}
+  .tok summary::-webkit-details-marker{display:none}
+  .tok .row{display:flex;gap:6px;margin-top:8px}
+  .tok input{flex:1;min-width:0;background:#0b0e14;border:1px solid #2a3140;border-radius:6px;color:#e8ecf3;padding:6px 8px;font:12px monospace}
+  .tok button{background:#1b2130;border:1px solid #2a3140;border-radius:6px;color:#e8ecf3;padding:6px 10px;cursor:pointer}
+  .tok button:hover{background:#242c3d}
+  .tok .st{margin-top:6px;font-size:11px;min-height:14px}
+  .tok .help{margin-top:8px;line-height:1.5;font-size:11px}
+  .tok .help a{color:#7aa2f7}
+  .ok{color:#30d158}.err{color:#e5484d}.warn{color:#e5c07b}
+  .note{max-width:420px;line-height:1.5;text-align:center;font-size:11px}
+</style></head><body>
+<h1>📡 Живой спред · MOEX vs Forex</h1>
+{block}
+<details class="tok" id="tok">
+  <summary><span>🔑 Токен T-Invest для котировок MOEX</span><span id="tokBadge" class="warn">не задан</span></summary>
+  <div class="row">
+    <input id="tokInp" type="password" placeholder="t.xxxxxxxx… (только для чтения)" autocomplete="off" spellcheck="false">
+    <button id="tokEye" title="показать/скрыть" type="button">👁</button>
+    <button id="tokSave" type="button">Сохранить</button>
+    <button id="tokDel" type="button" title="удалить токен из этого браузера">✕</button>
+  </div>
+  <div class="st" id="tokSt"></div>
+  <div class="help">
+    Токен хранится <b>только в этом браузере</b> (localStorage) и отправляется только на
+    <code>invest-public-api.tinkoff.ru</code>. Получить: Т-Инвестиции → Настройки →
+    <a href="https://www.tbank.ru/invest/settings/api/" target="_blank" rel="noopener">Токены API</a>
+    → «Только для чтения». Без токена строки MOEX пустые; форекс работает всегда.
+  </div>
+</details>
+<p class="note">MOEX bid/ask — T-Invest API (ваш токен, ~2 с). Forex — TradingView <code>FX_IDC</code>
+(USD/CNH, EUR/USD; EUR/CNH = кросс), ~2 с. Клик по строке цен копирует формулу спреда.
+Страница статическая: своего сервера нет, ключи никуда не уходят.</p>
+<script>
+(function(){
+  var PERPS = window.LSH_PERPS, moex = window.__claudeHudMoexPoll, fx = window.__claudeHudFxPoll;
+  if (!PERPS || !moex || !fx) { console.error('[lsh-data] HUD не инициализирован'); return; }
+  var POLL_MS = 2000;
+  var TI = 'https://invest-public-api.tinkoff.ru/rest/tinkoff.public.invest.api.contract.v1.';
+  var TV = 'https://scanner.tradingview.com/forex/scan';
+  var LS_TOKEN = 'lsh_tinvest_token', LS_UIDS = 'lsh_tinvest_uids_v1';
+  var $ = function(id){ return document.getElementById(id); };
+  var token = '', uids = {}, tiInFlight = false, tvInFlight = false, tiBackoffUntil = 0;
+  try { token = localStorage.getItem(LS_TOKEN) || ''; uids = JSON.parse(localStorage.getItem(LS_UIDS) || '{}'); } catch(e){}
+
+  function fetchT(url, opt, ms){
+    var ctl = new AbortController(); var t = setTimeout(function(){ ctl.abort(); }, ms);
+    opt = opt || {}; opt.signal = ctl.signal;
+    return fetch(url, opt).finally(function(){ clearTimeout(t); });
+  }
+  function ti(method, body){
+    return fetchT(TI + method, { method:'POST', headers:{ 'content-type':'application/json', 'Authorization':'Bearer ' + token },
+      body: JSON.stringify(body) }, 6000).then(function(r){
+        if (r.status === 429){ tiBackoffUntil = Date.now() + 15000; throw new Error('429 лимит T-Invest, пауза 15 с'); }
+        if (r.status === 401){ throw new Error('401 токен отклонён'); }
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      });
+  }
+  function q2n(q){ return q ? ((+q.units || 0) + (+q.nano || 0) / 1e9) : 0; }
+
+  // ── токен: форма ────────────────────────────────────────────────────────
+  function badge(txt, cls){ var b = $('tokBadge'); b.textContent = txt; b.className = cls || ''; }
+  function st(txt, cls){ var s = $('tokSt'); s.textContent = txt; s.className = 'st ' + (cls || ''); }
+  function applyToken(t, persist){
+    token = t || '';
+    if (persist){ try { token ? localStorage.setItem(LS_TOKEN, token) : localStorage.removeItem(LS_TOKEN); } catch(e){} }
+    $('tokInp').value = token;
+    if (!token){ badge('не задан', 'warn'); $('tok').open = true; return; }
+    badge('проверяю…', 'warn');
+    ti('UsersService/GetInfo', {}).then(function(j){
+      badge('✓ тариф ' + (j.tariff || '?'), 'ok'); st('Токен принят. Котировки MOEX пойдут через пару секунд.', 'ok'); $('tok').open = false;
+      tiBackoffUntil = 0; pollMoex();
+    }).catch(function(e){
+      badge('ошибка', 'err'); $('tok').open = true;
+      // «Failed to fetch» при верном токене = браузер не доверяет сертификату T-Bank: цепочка
+      // invest-public-api.tinkoff.ru подписана Russian Trusted Root CA (Минцифры), его нет в
+      // системных хранилищах macOS/Windows/Chrome по умолчанию (в Яндекс Браузере — есть).
+      st(/Failed to fetch|NetworkError/i.test(e.message)
+        ? 'Сеть/сертификат: браузер не доверяет сертификату T-Bank (УЦ Минцифры). Установите корневой сертификат с gosuslugi.ru/crt или откройте страницу в Яндекс Браузере.'
+        : e.message, 'err');
+    });
+  }
+  $('tokSave').addEventListener('click', function(){ applyToken($('tokInp').value.trim(), true); });
+  $('tokInp').addEventListener('keydown', function(ev){ if (ev.key === 'Enter') applyToken($('tokInp').value.trim(), true); });
+  $('tokDel').addEventListener('click', function(){ applyToken('', true); st('Токен удалён из браузера.', 'warn'); });
+  $('tokEye').addEventListener('click', function(){ var i = $('tokInp'); i.type = i.type === 'password' ? 'text' : 'password'; });
+
+  // ── MOEX: T-Invest GetOrderBook depth=1 (bid/ask/last одним вызовом; лимит 600/мин) ──
+  function resolveUid(ticker){
+    if (uids[ticker]) return Promise.resolve(uids[ticker]);
+    return ti('InstrumentsService/FutureBy', { idType:'INSTRUMENT_ID_TYPE_TICKER', classCode:'SPBFUT', id:ticker })
+      .then(function(j){
+        var uid = j && j.instrument && j.instrument.uid; if (!uid) throw new Error('нет uid для ' + ticker);
+        uids[ticker] = uid; try { localStorage.setItem(LS_UIDS, JSON.stringify(uids)); } catch(e){}
+        return uid;
+      });
+  }
+  function pollMoex(){
+    if (!token || tiInFlight || Date.now() < tiBackoffUntil) return;
+    var tks = {}; PERPS.forEach(function(p){ tks[p.l1] = 1; tks[p.l2] = 1; });
+    tiInFlight = true;
+    Promise.all(Object.keys(tks).map(function(t){
+      return resolveUid(t).then(function(uid){ return ti('MarketDataService/GetOrderBook', { instrumentId:uid, depth:1 }); })
+        .then(function(j){
+          var bid = q2n(j.bids && j.bids[0] && j.bids[0].price), ask = q2n(j.asks && j.asks[0] && j.asks[0].price), last = q2n(j.lastPrice);
+          var now = Date.now();
+          if (bid > 0 && ask > 0) moex[t] = { bid:bid, ask:ask, last:last || (bid + ask) / 2, at:now };
+          else if (last > 0)      moex[t] = { bid:0, ask:0, last:last, at:now };   // сессия закрыта — только last
+        });
+    })).then(function(){ if ($('tokSt').className.indexOf('err') >= 0) st('', ''); })
+      .catch(function(e){ st('MOEX: ' + e.message, 'err'); })
+      .finally(function(){ tiInFlight = false; });
+  }
+
+  // ── Forex: TradingView scanner, FX_IDC (composite ≈ cTrader XPBee до 1 пипа) ─
+  // EUR/CNH у FX_IDC широкий (~16 пип против ~3 у брокера) → считаем кроссом EURUSD×USDCNH.
+  // ponytail: кросс = модель; если брокер котирует EURCNH напрямую шире — добавить FX_IDC:EURCNH.
+  var TV_SYM = { 'USD/CNH':'FX_IDC:USDCNH', 'EUR/USD':'FX_IDC:EURUSD' };
+  function pollFx(){
+    if (tvInFlight) return;
+    tvInFlight = true;
+    // Без content-type: TV разрешает в preflight только Referer/Accept, а POST с text/plain — «простой» запрос без preflight.
+    fetchT(TV, { method:'POST',
+      body: JSON.stringify({ symbols:{ tickers:Object.keys(TV_SYM).map(function(k){ return TV_SYM[k]; }) }, columns:['bid','ask'] }) }, 6000)
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        var now = Date.now(), got = {};
+        (j.data || []).forEach(function(row){
+          var pair = Object.keys(TV_SYM).filter(function(k){ return TV_SYM[k] === row.s; })[0];
+          var bid = +row.d[0], ask = +row.d[1];
+          if (pair && bid > 0 && ask >= bid){ got[pair] = { bid:bid, ask:ask, at:now }; fx[pair] = got[pair]; }
+        });
+        var u = got['USD/CNH'], e = got['EUR/USD'];
+        if (u && e) fx['EUR/CNH'] = { bid:e.bid * u.bid, ask:e.ask * u.ask, at:now };
+      })
+      .catch(function(){ /* сеть — ноги протухнут по возрасту */ })
+      .finally(function(){ tvInFlight = false; });
+  }
+
+  applyToken(token, false);
+  pollFx(); setInterval(pollFx, POLL_MS);
+  pollMoex(); setInterval(pollMoex, POLL_MS);
+  ['visibilitychange','focus','pageshow'].forEach(function(ev){
+    window.addEventListener(ev, function(){
+      if (document.visibilityState === 'hidden') return;
+      tiInFlight = false; tvInFlight = false; pollFx(); pollMoex();
+    });
+  });
+  window.lshDataStats = function(){ return { hasToken:!!token, uids:uids, moex:moex, fx:fx, tiBackoffUntil:tiBackoffUntil }; };
+})();
+</script>
+</body></html>
