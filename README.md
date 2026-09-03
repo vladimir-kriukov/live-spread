@@ -5,19 +5,17 @@
 (USD/CNH, EUR/CNH, EUR/USD). Две строки цен на стратегию — обе стороны сделки по лимиткам
 (Short → ask, Buy → bid), процент раздвижки на каждой, свежесть по ногам, клик копирует формулу.
 
-**Бэкенда нет. Ключи никуда не уходят.**
+**Пользователю настраивать нечего: ни токенов, ни сертификатов.**
 
 | Нога | Источник | Как |
 |---|---|---|
-| MOEX bid/ask | T-Invest API | ваш токен «только для чтения», хранится в localStorage браузера, уходит только на `invest-public-api.tinkoff.ru`; `GetOrderBook depth=1` раз в 2 с |
+| MOEX bid/ask | T-Invest API через relay `api/quotes.php` на этом же хостинге | PHP ходит в T-Invest с корнем УЦ Минцифры (`CURLOPT_CAINFO`), общий токен «только для чтения» лежит вне `public_html`; `GetOrderBook depth=1`, кэш 1 с на всех посетителей, страница опрашивает раз в 2 с |
 | Forex bid/ask | TradingView scanner `FX_IDC` | без ключа, раз в 2 с; EUR/CNH считается кроссом EURUSD×USDCNH |
 
 ## Использование
 
-1. Откройте страницу: https://live-spread.kryuko.beget.tech/ (зеркало: https://vladimir-kriukov.github.io/live-spread/), либо скачайте `index.html` и откройте двойным кликом — работает и так.
-2. Вставьте токен T-Invest: Т-Инвестиции → Настройки → Токены API → «Только для чтения».
-3. Если при верном токене «ошибка сети»: браузер не доверяет сертификату T-Bank
-   (УЦ Минцифры). Установите корневой сертификат с gosuslugi.ru/crt или откройте в Яндекс Браузере.
+1. Откройте http://live-spread.kryuko.beget.tech/ — и всё. Локально скачанный `index.html` тоже работает (relay берётся с того же адреса).
+2. Зеркало на GitHub Pages (https://vladimir-kriukov.github.io/live-spread/) показывает только форекс: https-страница не может обращаться к http-relay, пока у Beget-домена нет сертификата.
 
 ## Разработка
 
@@ -25,5 +23,7 @@
 калькулятора (`.claude/live-spread-hud.html` в соседнем проекте `../spread`), форма токена и
 слой данных из `template.html` здесь. Сборка из `../spread`:
 `python3 .claude/scripts/build_live_spread.py` (пишет `index.html` сюда, папка задаётся
-`LIVE_SPREAD_DIR`), затем commit + push в этом репозитории. Заливка на Beget: тот же скрипт с `--deploy` (rsync по SSH в `live-spread/public_html/`, ключ добавляется в панели Beget → SSH-доступ). При перекладке контрактов
+`LIVE_SPREAD_DIR`), затем commit + push в этом репозитории. Заливка на Beget: тот же скрипт с `--deploy` (rsync `index.html` + `api/` по SSH, ключ — через `ssh-copy-id`).
+Relay: `api/quotes.php` (PHP 7.4+/8.2) + `api/ca-minzifry-root.crt` (корень «Russian Trusted Root CA», публичный).
+Токен T-Invest на сервере: `~/live-spread.kryuko.beget.tech/tinvest.token` (вне `public_html`, не в репо), кэш и uid — в `.cache/` рядом. При перекладке контрактов
 (`SiZ6/CRZ6` на следующую серию) правится список `PERPS` в сайдкаре и страница пересобирается.
