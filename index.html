@@ -102,7 +102,7 @@
   if (window.__claudeLiveSpreadHudLoaded) return;
   window.__claudeLiveSpreadHudLoaded = true;
 
-  var CT_BASE = 'https://arb-moex-proxy.klevtsov-anton.workers.dev'; // docker → /proxy/ctrader-prices
+  var CT_BASE = ''; // standalone: чужих бэкендов нет, внутренние поллеры ниже отключены
   var REPAINT_MS = 1000, FX_POLL_MS = 1000, MOEX_POLL_MS = 3000;
   var MOEX_FRESH_MS = 8000, MOEX_STALE_MS = 30000;   // green<8с (свой poll ~3с), yellow<30с, red/freeze>30с
   // FX poll 1с (было 3.5с): /proxy/ctrader-prices — локальный direct-стрим cTrader (sub-second),
