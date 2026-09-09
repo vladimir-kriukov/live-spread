@@ -22,7 +22,7 @@
   вкладки, тикает из ТЕХ ЖЕ живых фидов, что уже кормят «Мои позиции»:
     • MOEX  — window.__wsLivePrices[ticker] = {price,bid,ask,at,quoteAt}
               (T-Invest WS, sub-second; наполняет docker proxy/realtime-inject.js)
-    • Forex — свой poll CT_BASE/ctrader-prices (реальные cTrader bid/ask, ~3.5с)
+    • Forex — свой poll CT_BASE/ctrader-prices (валюты — TradingView FX_IDC через прокси, металлы — cTrader; с 2026-09-04)
   Headline (крупная цифра) = ИСПОЛНИМАЯ раздвижка (FILL-NOW), bid/ask-честная:
     шорт-нога по bid, лонг по ask, форекс по пересекаемой стороне → «если залью
     все ноги ПРЯМО СЕЙЧАС». Направление (Short/Buy) — по знаку MID (стабильный
@@ -164,10 +164,24 @@
     return null;
   }
   // ── Forex-нога из cTrader poll ───────────────────────────────────────────
-  // FX_MARKUP (2026-08-07, по просьбе пользователя): raw top-of-book Open API НЕ несёт
-  // наценку брокера (XPBee торгует хуже сырого стакана, см. [[ctrader-raw-vs-terminal-spread]]).
-  // Котировку делаем на 0.0002 ХУЖЕ в сторону сделки: Buy(bid)+markup, Sell(ask)−markup —
+  // FX_MARKUP (2026-08-07, по просьбе пользователя): raw top-of-book НЕ несёт наценку
+  // брокера (XPBee торгует хуже сырого стакана, см. [[ctrader-raw-vs-terminal-spread]]).
+  // Котировку делаем ХУЖЕ в сторону сделки: Buy(bid)+markup, Sell(ask)−markup —
   // % строк A/B и FILL-NOW считаются от исполнимых цен. MID остаётся сырым (референс = график).
+  //
+  // ⚠ КЛАМП ПО ШИРИНЕ СТАКАНА (2026-09-09, переход валют на TradingView). Наценка НЕ может
+  // унести цену дальше противоположной стороны книги: `m = min(FX_MARKUP, ask−bid)`. Без
+  // клампа при спреде уже 2×наценки цены ПЕРЕКРЕЩИВАЮТСЯ — Buy печатается ДОРОЖЕ Sell,
+  // и % обеих строк уезжает. На cTrader это не всплывало: там сырой спред USDCNH ≈ 2 пипа,
+  // ровно 2×0.0002, и формула бит-в-бит совпадала с тейкер-сторонами (Buy=ask, Sell=bid).
+  // TradingView FX_IDC — индикативный композит и куда уже (замер 09.09: USDCNH 1.5 пипа,
+  // EURUSD 0.3, EURCNH 3.7 — кросс, спреды множатся), поэтому перелёт стал видимым:
+  // EURUSD печатался с Buy−Sell = +3.7 пипа В МИНУС. С клампом валюты садятся на
+  // тейкер-стороны (как было на cTrader), металлы/Brent не меняются вовсе (их сырой спред
+  // $4.6–5.5 ≫ наценки → min() всегда берёт FX_MARKUP), перекрёст невозможен по построению.
+  // ⚠ Обратная сторона: TV-спред УЖЕ реального XPBee (2–7 пипов, плавает), поэтому
+  // отображаемая раздвижка теперь НЕ ДОБИРАЕТ стоимость исполнения. Поднять пол можно
+  // только замером Buy/Sell в терминале — API наценку не отдаёт.
   var FX_MARKUP = 0.0002;
   // 2026-08-07: cTrader шлёт спот ТОЛЬКО при изменении цены → на тихом рынке тик USDCNH
   // стареет на 20-60с при живом стриме (EURUSD в том же ответе тикает суб-секундно).
@@ -180,7 +194,8 @@
     var now = Date.now(), age = now - q.at;
     var tickAge = age;
     if ((now - fxStreamAliveAt) < 15000 && age > FX_FRESH_MS) age = FX_FRESH_MS - 1;
-    return { mid:(q.bid+q.ask)/2, bid:q.bid + FX_MARKUP, ask:q.ask - FX_MARKUP, ageMs:age, tickAge:tickAge, book:true };
+    var m = Math.min(FX_MARKUP, Math.max(0, q.ask - q.bid));   // не перелетать через стакан
+    return { mid:(q.bid+q.ask)/2, bid:q.bid + m, ask:q.ask - m, ageMs:age, tickAge:tickAge, book:true };
   }
 
   // fetch С ТАЙМАУТОМ — обязателен для обоих поллов (фикс 2026-08-25).
