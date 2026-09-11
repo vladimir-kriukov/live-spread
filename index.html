@@ -127,6 +127,34 @@
   // портфеля берутся из ЭТОГО полла, №12 фетчит сам только пары вне PERPS (металлы).
   // Значения СЫРЫЕ (без FX_MARKUP) — наценку каждый потребитель применяет своей стороной.
   window.__claudeHudFxPoll = fxCache;
+  // FX_MARKUP (2026-08-07, по просьбе пользователя): raw top-of-book НЕ несёт наценку
+  // брокера (XPBee торгует хуже сырого стакана, см. [[ctrader-raw-vs-terminal-spread]]).
+  // Котировку делаем ХУЖЕ в сторону сделки; MID остаётся сырым (референс = график).
+  //
+  // 2026-09-11 («ухудши форекс на 2 пункта»): наценка — СНАРУЖИ книги, от тейкер-стороны:
+  //   Buy = ask + m, Sell = bid − m.
+  // Замер по скриншоту терминала: сырой cTrader USDCNH 6.7092/6.7094, кнопки Sell 6.7090 / Buy 6.7096
+  // → XPBee добавляет ровно 2 пипа к КАЖДОЙ стороне LP-котировки. Старая формула (Buy = bid + m,
+  // Sell = ask − m) при 2-пиповом сыром спреде давала тейкер-стороны, т.е. на 2 пипа ЛУЧШЕ терминала,
+  // а кламп 09.09 (m ≤ ask−bid, нужен был только для узкого TV-композита) не давал её поднять — снят.
+  // Теперь при любой ширине книги: Buy > ask, Sell < bid, Buy − Sell = спред + 2m (Buy всегда > Sell).
+  var FX_MARKUP = 0.0002;
+  // ═══ 2026-09-11: ЕДИНЫЙ ВЛАДЕЛЕЦ форекс-котировки и наценки — этот сайдкар. ═══
+  // «Мои позиции» (№12) НЕ считают цену и НЕ фетчат сами: читают window.claudeFxQuote(pair) и просят
+  // поллить свои пары (металлы вне PERPS) через window.claudeFxWatch(pairs). Менять источник (URL,
+  // сторону, наценку) — ТОЛЬКО здесь: применится и в HUD, и в портфеле одновременно.
+  // Экспорт стоит ДО DOM-guard: чистые функции доступны и без плашки (тест X9).
+  function fxSides(bid, ask){                                   // исполнимые стороны, снаружи книги
+    return { buy: +(ask + FX_MARKUP).toFixed(6), sell: +(bid - FX_MARKUP).toFixed(6) };
+  }
+  var fxExtra = {};                                             // пары, которые попросили потребители (claudeFxWatch)
+  window.claudeFxSides = fxSides;
+  window.claudeFxWatch = function(pairs){ (pairs || []).forEach(function(p){ if (p) fxExtra[p] = 1; }); };
+  window.claudeFxQuote = function(pair){
+    var q = fxCache[pair]; if (!q || !(q.bid > 0 && q.ask > 0)) return null;
+    var sd = fxSides(q.bid, q.ask);
+    return { bid:q.bid, ask:q.ask, mid:(q.bid + q.ask)/2, buy:sd.buy, sell:sd.sell, at:q.at, ageMs: Date.now() - q.at };
+  };
   var fxInFlight = false, moexInFlight = false;  // guard: не наслаивать медленные запросы
   var el = document.getElementById('claude-lsh');
   if (!el) return;
@@ -164,18 +192,6 @@
     return null;
   }
   // ── Forex-нога из cTrader poll ───────────────────────────────────────────
-  // FX_MARKUP (2026-08-07, по просьбе пользователя): raw top-of-book НЕ несёт наценку
-  // брокера (XPBee торгует хуже сырого стакана, см. [[ctrader-raw-vs-terminal-spread]]).
-  // Котировку делаем ХУЖЕ в сторону сделки; MID остаётся сырым (референс = график).
-  //
-  // 2026-09-11 («ухудши форекс на 2 пункта»): наценка — СНАРУЖИ книги, от тейкер-стороны:
-  //   Buy = ask + m, Sell = bid − m.
-  // Замер по скриншоту терминала: сырой cTrader USDCNH 6.7092/6.7094, кнопки Sell 6.7090 / Buy 6.7096
-  // → XPBee добавляет ровно 2 пипа к КАЖДОЙ стороне LP-котировки. Старая формула (Buy = bid + m,
-  // Sell = ask − m) при 2-пиповом сыром спреде давала тейкер-стороны, т.е. на 2 пипа ЛУЧШЕ терминала,
-  // а кламп 09.09 (m ≤ ask−bid, нужен был только для узкого TV-композита) не давал её поднять — снят.
-  // Теперь при любой ширине книги: Buy > ask, Sell < bid, Buy − Sell = спред + 2m (Buy всегда > Sell).
-  var FX_MARKUP = 0.0002;
   // 2026-08-07: cTrader шлёт спот ТОЛЬКО при изменении цены → на тихом рынке тик USDCNH
   // стареет на 20-60с при живом стриме (EURUSD в том же ответе тикает суб-секундно).
   // Если стрим жив (хоть один символ тикал <5с) — старый тик значит «цена НЕ МЕНЯЛАСЬ»:
@@ -187,8 +203,8 @@
     var now = Date.now(), age = now - q.at;
     var tickAge = age;
     if ((now - fxStreamAliveAt) < 15000 && age > FX_FRESH_MS) age = FX_FRESH_MS - 1;
-    // buy/sell — исполнимые цены с наценкой снаружи книги (см. FX_MARKUP выше); mid — сырой.
-    return { mid:(q.bid+q.ask)/2, buy:q.ask + FX_MARKUP, sell:q.bid - FX_MARKUP, ageMs:age, tickAge:tickAge, book:true };
+    var sd = fxSides(q.bid, q.ask);                           // исполнимые стороны (снаружи книги); mid — сырой
+    return { mid:(q.bid+q.ask)/2, buy:sd.buy, sell:sd.sell, ageMs:age, tickAge:tickAge, book:true };
   }
 
   // fetch С ТАЙМАУТОМ — обязателен для обоих поллов (фикс 2026-08-25).
@@ -212,16 +228,17 @@
 
   function pollFx(){ return; // standalone: данные пишет внешний слой (template.html)
     if (fxInFlight) return;                    // не наслаивать медленный /ctrader-prices
-    var seen = {}, uniq = [];
-    PERPS.forEach(function(p){ var s=tickerToXp(p.fx); if(!seen[s]){ seen[s]=1; uniq.push(s); } });
+    var seen = {}, pairs = [];
+    PERPS.forEach(function(p){ if(!seen[p.fx]){ seen[p.fx]=1; pairs.push(p.fx); } });
+    Object.keys(fxExtra).forEach(function(f){ if(!seen[f]){ seen[f]=1; pairs.push(f); } });   // пары портфеля (№12 → claudeFxWatch)
     fxInFlight = true;
-    fetchT(CT_BASE + '/ctrader-prices?symbols=' + encodeURIComponent(uniq.join(',')), 4000)
+    fetchT(CT_BASE + '/ctrader-prices?symbols=' + encodeURIComponent(pairs.map(tickerToXp).join(',')), 4000)
       .then(function(r){ return r.json(); })
       .then(function(j){
         var px = j && j.prices; if (!px) return;
         var now = Date.now();
-        PERPS.forEach(function(p){
-          var q = px[tickerToXp(p.fx)];
+        pairs.forEach(function(f){
+          var q = px[tickerToXp(f)];
           if (q && typeof q.bid==='number' && typeof q.ask==='number' && q.bid>0 && q.ask>0){
             // at = время РЕАЛЬНОГО тика (now − ageMs стрима), НЕ время ответа: cTrader шлёт спот
             // только на изменение цены, поэтому на тихом рынке тик может быть старым. Честный
@@ -229,7 +246,7 @@
             // устаревшую цену как «свежую», отсюда расхождение с терминалом).
             var tickAt = (typeof q.ageMs === 'number') ? (now - q.ageMs) : now;
             if (typeof q.ageMs === 'number' && q.ageMs < 5000) fxStreamAliveAt = now;
-            fxCache[p.fx] = { bid:q.bid, ask:q.ask, at:tickAt };
+            fxCache[f] = { bid:q.bid, ask:q.ask, at:tickAt };
           }
         });
       })
