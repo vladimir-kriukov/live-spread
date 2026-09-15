@@ -115,13 +115,13 @@
     { key:'PERP_UCNH', prefix:'pu', short:'UC · USDRUBF/CNYRUBF', l1:'USDRUBF', l2:'CNYRUBF', fx:'USD/CNH' },
     { key:'PERP_ECNH', prefix:'pe', short:'EC · EURRUBF/CNYRUBF', l1:'EURRUBF', l2:'CNYRUBF', fx:'EUR/CNH' },
     { key:'PERP_EU',   prefix:'pr', short:'EU · EURRUBF/USDRUBF', l1:'EURRUBF', l2:'USDRUBF', fx:'EUR/USD' },
-    { key:'TRIPLE',    prefix:'tr', short:'Si/Cr · SiZ6/CRZ6',    l1:'SiZ6',    l2:'CRZ6',    fx:'USD/CNH',
+    { key:'TRIPLE',    prefix:'tr', short:'Si/Cr · Si12/CRZ6',    l1:'SiZ6',    l2:'CRZ6',    fx:'USD/CNH',
       l1div:1000, snap:['trSi','trCr','trFx'] },
     // v3 (2026-09-15): ГИБРИДЫ «квартальник × вечник» — та же формула (l1/l1div)/l2 vs fx,
     // просто ноги из разных серий. Таба в калькуляторе у них нет → snap:[] (Δ vs 🔄 не рисуется,
     // inpVal(undefined)=0 → spSnap=null). Новых тикеров в ISS-полл не добавляют: SiZ6/CRZ6/
     // USDRUBF/CNYRUBF уже поллятся строками выше. Контракты Z6 обновлять руками (см. выше).
-    { key:'SIQ_CNYP',  prefix:'sq', short:'SiZ6/CNY-перп',          l1:'SiZ6',    l2:'CNYRUBF', fx:'USD/CNH',
+    { key:'SIQ_CNYP',  prefix:'sq', short:'Si12/CNY-перп',          l1:'SiZ6',    l2:'CNYRUBF', fx:'USD/CNH',
       l1div:1000, snap:[] },
     { key:'USDP_CRQ',  prefix:'uq', short:'USD-перп/CRZ6',          l1:'USDRUBF', l2:'CRZ6',    fx:'USD/CNH',
       snap:[] }
