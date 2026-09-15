@@ -413,7 +413,7 @@
     // футер-статус
     var wsN = Object.keys(window.__wsLivePrices||{}).length;
     foot.textContent = (anyLive ? (allFresh?'🟢 live':'🟡 частично устарело') : '🔴 нет фида')
-      + ' · MOEX T-Invest · Forex TradingView '+(Object.keys(fxCache).length?'ok':'—');
+      + ' · MOEX T-Invest · Forex '+(window.__lshFxSrc||'—')+' '+(Object.keys(fxCache).length?'ok':'—');
   }
 
   // ── UI: collapse ─────────────────────────────────────────────────────────
@@ -456,7 +456,7 @@
 </script>
 <!-- END: claude-live-spread-hud-block -->
 <div id="lshSt"></div>
-<p class="note">MOEX bid/ask — T-Invest через relay на этом же сервере (~2 с). Forex — TradingView <code>FX_IDC</code>
+<p class="note">MOEX bid/ask — T-Invest через relay на этом же сервере (~2 с). Forex — живой стрим cTrader (XPBee), тот же, что у калькулятора; при остановке публикации подхватывается TradingView <code>FX_IDC</code>
 (USD/CNH, EUR/USD; EUR/CNH = кросс), ~2 с. Клик по строке цен копирует формулу спреда.
 Ничего настраивать не нужно.</p>
 <script>
@@ -467,7 +467,7 @@
   // Relay (api/quotes.php) живёт на том же origin; для локально открытого файла (file://) — абсолютный адрес.
   var RELAY = location.protocol === 'file:' ? 'http://live-spread.kryuko.beget.tech/api/quotes.php' : 'api/quotes.php';
   var TV = 'https://scanner.tradingview.com/forex/scan';
-  var moexInFlight = false, tvInFlight = false;
+  var moexInFlight = false, tvInFlight = false, pushInFlight = false;
   var stEl = document.getElementById('lshSt');
   function st(txt, cls){ stEl.textContent = txt; stEl.className = cls || ''; }
 
@@ -498,11 +498,44 @@
       .finally(function(){ moexInFlight = false; });
   }
 
-  // ── Forex: TradingView scanner, FX_IDC (composite ≈ cTrader XPBee до 1 пипа) ─
-  // EUR/CNH у FX_IDC широкий (~16 пип против ~3 у брокера) → считаем кроссом EURUSD×USDCNH.
-  // ponytail: кросс = модель; если брокер котирует EURCNH напрямую шире — добавить FX_IDC:EURCNH.
-  var TV_SYM = { 'USD/CNH':'FX_IDC:USDCNH', 'EUR/USD':'FX_IDC:EURUSD' };
+  // ── Forex: cTrader (XPBee) из api/fx.json, TradingView — только фолбэк ──────
+  // Живые bid/ask публикует docker пользователя (proxy/fx-push.js) по ssh раз в 2с — ТОТ ЖЕ
+  // стрим, что кормит калькулятор. TradingView FX_IDC помечен «streaming», но держит одно
+  // значение по 20–30с (замер 15.09.2026: 6.71335 неподвижен 17с, пока cTrader тикал трижды),
+  // и EUR/CNH там приходится считать кроссом. Поэтому TV остаётся страховкой на случай,
+  // когда docker выключен, а не основным источником.
+  var FXJ = location.protocol === 'file:' ? 'http://live-spread.kryuko.beget.tech/api/fx.json' : 'api/fx.json';
+  var FX_DEAD_MS = 15000;                // fx.json старше — считаем, что публикация встала
+  var skew = null;
+  window.__lshFxSrc = '—';
+
   function pollFx(){
+    if (pushInFlight) return;
+    pushInFlight = true;
+    fetchT(FXJ + '?_=' + Date.now(), { cache:'no-store' }, 6000)
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if (!j || !j.fx || !j.at) throw new Error('пустой fx.json');
+        var now = Date.now();
+        // Часы docker'а и браузера — разные. Перекос оцениваем МИНИМУМОМ (now − j.at) за сессию:
+        // классическая оценка односторонней задержки, устойчива к разовым тормозам сети и не
+        // маскирует остановку публикации (j.at перестаёт расти → возраст честно растёт).
+        var d = now - j.at;
+        skew = (skew == null) ? d : Math.min(skew, d);
+        if (now - (j.at + skew) > FX_DEAD_MS) throw new Error('fx.json протух');
+        Object.keys(j.fx).forEach(function(p){
+          var q = j.fx[p];
+          if (q && q.bid > 0 && q.ask >= q.bid) fx[p] = { bid:q.bid, ask:q.ask, at:(q.at || j.at) + skew };
+        });
+        window.__lshFxSrc = 'cTrader';
+      })
+      .catch(function(){ window.__lshFxSrc = 'TradingView'; pollFxTV(); })
+      .finally(function(){ pushInFlight = false; });
+  }
+
+  // Фолбэк: EUR/CNH у FX_IDC широкий (~16 пип против ~3 у брокера) → считаем кроссом EURUSD×USDCNH.
+  var TV_SYM = { 'USD/CNH':'FX_IDC:USDCNH', 'EUR/USD':'FX_IDC:EURUSD' };
+  function pollFxTV(){
     if (tvInFlight) return;
     tvInFlight = true;
     // Без content-type: TV разрешает в preflight только Referer/Accept, а POST с text/plain — «простой» запрос без preflight.
@@ -528,10 +561,10 @@
   ['visibilitychange','focus','pageshow'].forEach(function(ev){
     window.addEventListener(ev, function(){
       if (document.visibilityState === 'hidden') return;
-      moexInFlight = false; tvInFlight = false; pollFx(); pollMoex();
+      moexInFlight = false; tvInFlight = false; pushInFlight = false; pollFx(); pollMoex();
     });
   });
-  window.lshDataStats = function(){ return { relay:RELAY, moex:moex, fx:fx }; };
+  window.lshDataStats = function(){ return { relay:RELAY, fxSrc:window.__lshFxSrc, skewMs:skew, moex:moex, fx:fx }; };
 })();
 </script>
 </body></html>
