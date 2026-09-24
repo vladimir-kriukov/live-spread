@@ -39,7 +39,9 @@
   // ── MOEX: relay → T-Invest GetOrderBook depth=1 (сертификат Минцифры — на сервере) ──
   function pollMoex(){
     if (moexInFlight) return;
-    var tks = {}; PERPS.forEach(function(p){ tks[p.l1] = 1; tks[p.l2] = 1; });
+    // refMoex — опорная нога биржевым тикером (внутри-MOEX треугольники): её тоже надо поллить,
+    // иначе строка вечно «форекс: нет данных» при полностью живом relay.
+    var tks = {}; PERPS.forEach(function(p){ tks[p.l1] = 1; tks[p.l2] = 1; if (p.refMoex) tks[p.refMoex] = 1; });
     moexInFlight = true;
     fetchT(RELAY + '?t=' + encodeURIComponent(Object.keys(tks).join(',')), {}, 6000)
       .then(function(r){ return r.json(); })
@@ -65,6 +67,7 @@
   // когда docker выключен, а не основным источником.
   var FXJ = location.protocol === 'file:' ? 'http://live-spread.kryuko.beget.tech/api/fx.json' : 'api/fx.json';
   var FX_DEAD_MS = 15000;                // fx.json старше — считаем, что публикация встала
+  var MAX_SKEW_MS = 120000;              // столько РАСХОДЯТСЯ ЧАСЫ; больше — это уже стоящая публикация
   var skew = null;
   window.__lshFxSrc = '—';
 
@@ -81,6 +84,11 @@
         // маскирует остановку публикации (j.at перестаёт расти → возраст честно растёт).
         var d = now - j.at;
         skew = (skew == null) ? d : Math.min(skew, d);
+        // Клампим: если публикация встала ДО открытия страницы, первый же d = вся протухшесть,
+        // skew защёлкивается на ней, возраст выходит ~0 и мёртвый фид едет как живой (18–22.09.2026:
+        // страница 4 суток рисовала «🟢 cTrader» на котировках от 18.09). Часы столько не расходятся.
+        if (skew > MAX_SKEW_MS) skew = MAX_SKEW_MS;
+        if (skew < -MAX_SKEW_MS) skew = -MAX_SKEW_MS;
         if (now - (j.at + skew) > FX_DEAD_MS) throw new Error('fx.json протух');
         Object.keys(j.fx).forEach(function(p){
           var q = j.fx[p];

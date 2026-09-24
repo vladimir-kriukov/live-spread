@@ -124,7 +124,14 @@
     { key:'SIQ_CNYP',  prefix:'sq', short:'Si12/CNYRUBF',          l1:'SiZ6',    l2:'CNYRUBF', fx:'USD/CNH',
       l1div:1000, snap:[] },
     { key:'USDP_CRQ',  prefix:'uq', short:'USDRUBF/CNY12',          l1:'USDRUBF', l2:'CRZ6',    fx:'USD/CNH',
-      snap:[] }
+      snap:[] },
+    // 2026-09-24: ВНУТРИ-MOEX треугольник — синтетика USD/CNY из Si и CR против прямого UC.
+    // Форекса тут нет вовсе, поэтому опорная нога задаётся refMoex (тикер), а не fx (пара).
+    // Все три контракта по 1000 единиц, экспирация у всех 17.12.2026 → спред обязан сойтись
+    // к нулю в один день. Пропорция ног 1 Si : 6.71 CR : 1 UC (коэффициент CR = сам курс
+    // USD/CNY, плавает вместе с ним); целыми — 10 : 67 : 10.
+    { key:'SICR_UC',   prefix:'su', short:'Si12/CNY12 vs UC12',     l1:'SiZ6',    l2:'CRZ6',    refMoex:'UCZ6',
+      l1div:1000, snap:[] }
   ];
 
   var fxCache = {};            // symbol -> {bid,ask,at}
@@ -239,7 +246,7 @@
   function pollFx(){ return; // standalone: данные пишет внешний слой (template.html)
     if (fxInFlight) return;                    // не наслаивать медленный /ctrader-prices
     var seen = {}, pairs = [];
-    PERPS.forEach(function(p){ if(!seen[p.fx]){ seen[p.fx]=1; pairs.push(p.fx); } });
+    PERPS.forEach(function(p){ if(p.fx && !seen[p.fx]){ seen[p.fx]=1; pairs.push(p.fx); } });
     Object.keys(fxExtra).forEach(function(f){ if(!seen[f]){ seen[f]=1; pairs.push(f); } });   // пары портфеля (№12 → claudeFxWatch)
     fxInFlight = true;
     fetchT(CT_BASE + '/ctrader-prices?symbols=' + encodeURIComponent(pairs.map(tickerToXp).join(',')), 4000)
@@ -266,7 +273,7 @@
 
   function pollMoex(){ return; // standalone: данные пишет внешний слой (template.html)
     if (moexInFlight) return;
-    var tks = {}; PERPS.forEach(function(p){ tks[p.l1]=1; tks[p.l2]=1; });
+    var tks = {}; PERPS.forEach(function(p){ tks[p.l1]=1; tks[p.l2]=1; if(p.refMoex) tks[p.refMoex]=1; });
     var list = Object.keys(tks);
     moexInFlight = true;
     // CT_BASE + '/?t=' → docker переписывает воркер-URL на /proxy → /proxy/?t= (direct ISS + T-Invest overlay);
@@ -291,8 +298,15 @@
       .finally(function(){ moexInFlight = false; });
   }
 
+  // Опорная нога MOEX-тикером: у форекса buy/sell несут наценку брокера, на бирже её нет,
+  // а стороны — мейкерские, как у остальных MOEX-ног (Buy → bid, Short → ask).
+  function moexRef(m){
+    return m ? { bid:m.bid, ask:m.ask, mid:m.mid, buy:m.bid, sell:m.ask, ageMs:m.ageMs, book:m.book } : null;
+  }
+
   function computeRow(p){
-    var l1 = moexLeg(p.l1), l2 = moexLeg(p.l2), fx = fxLeg(p.fx);
+    var l1 = moexLeg(p.l1), l2 = moexLeg(p.l2);
+    var fx = p.refMoex ? moexRef(moexLeg(p.refMoex)) : fxLeg(p.fx);
     var out = { l1:l1, l2:l2, fx:fx, ok:false };
     if (!l1 || !l2 || !fx) return out;
     out.ok = true;
@@ -318,7 +332,8 @@
     var ids = p.snap || [p.prefix+'L1', p.prefix+'L2', p.prefix+'Fx'];
     var sL1 = inpVal(ids[0]), sL2 = inpVal(ids[1]), sFx = inpVal(ids[2]);
     out.spSnap = (sL1>0 && sL2>0 && sFx>0) ? ((sL1/k/sL2 - sFx)/sFx*100) : null;
-    out.stale = (l1.ageMs > MOEX_STALE_MS) || (l2.ageMs > MOEX_STALE_MS) || (fx.ageMs > FX_STALE_MS);
+    var refStale = p.refMoex ? MOEX_STALE_MS : FX_STALE_MS;
+    out.stale = (l1.ageMs > MOEX_STALE_MS) || (l2.ageMs > MOEX_STALE_MS) || (fx.ageMs > refStale);
     out.maxAge = Math.max(l1.ageMs, l2.ageMs, fx.ageMs);
     return out;
   }
@@ -480,7 +495,9 @@
   // ── MOEX: relay → T-Invest GetOrderBook depth=1 (сертификат Минцифры — на сервере) ──
   function pollMoex(){
     if (moexInFlight) return;
-    var tks = {}; PERPS.forEach(function(p){ tks[p.l1] = 1; tks[p.l2] = 1; });
+    // refMoex — опорная нога биржевым тикером (внутри-MOEX треугольники): её тоже надо поллить,
+    // иначе строка вечно «форекс: нет данных» при полностью живом relay.
+    var tks = {}; PERPS.forEach(function(p){ tks[p.l1] = 1; tks[p.l2] = 1; if (p.refMoex) tks[p.refMoex] = 1; });
     moexInFlight = true;
     fetchT(RELAY + '?t=' + encodeURIComponent(Object.keys(tks).join(',')), {}, 6000)
       .then(function(r){ return r.json(); })
@@ -506,6 +523,7 @@
   // когда docker выключен, а не основным источником.
   var FXJ = location.protocol === 'file:' ? 'http://live-spread.kryuko.beget.tech/api/fx.json' : 'api/fx.json';
   var FX_DEAD_MS = 15000;                // fx.json старше — считаем, что публикация встала
+  var MAX_SKEW_MS = 120000;              // столько РАСХОДЯТСЯ ЧАСЫ; больше — это уже стоящая публикация
   var skew = null;
   window.__lshFxSrc = '—';
 
@@ -522,6 +540,11 @@
         // маскирует остановку публикации (j.at перестаёт расти → возраст честно растёт).
         var d = now - j.at;
         skew = (skew == null) ? d : Math.min(skew, d);
+        // Клампим: если публикация встала ДО открытия страницы, первый же d = вся протухшесть,
+        // skew защёлкивается на ней, возраст выходит ~0 и мёртвый фид едет как живой (18–22.09.2026:
+        // страница 4 суток рисовала «🟢 cTrader» на котировках от 18.09). Часы столько не расходятся.
+        if (skew > MAX_SKEW_MS) skew = MAX_SKEW_MS;
+        if (skew < -MAX_SKEW_MS) skew = -MAX_SKEW_MS;
         if (now - (j.at + skew) > FX_DEAD_MS) throw new Error('fx.json протух');
         Object.keys(j.fx).forEach(function(p){
           var q = j.fx[p];
