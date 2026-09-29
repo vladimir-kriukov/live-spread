@@ -55,14 +55,31 @@
     cursor:pointer;font-weight:700}
   #claude-lsh .lsh-hd .lsh-title{display:flex;align-items:center;gap:6px}
   #claude-lsh .lsh-hd .lsh-tools{display:flex;align-items:center;gap:8px;font-weight:400}
+  /* Переключатель вида спреда — компактная плашка, показывает ТЕКУЩИЙ вид («%» / «×100»), клик
+     меняет. Нативный чекбокс съедал ширину → имена переносились в две строки, а значения в
+     шапках строк плясали по горизонтали и не стояли под значениями строк цен. */
+  #claude-lsh .lsh-mode{flex:none;font-size:9.5px;font-weight:700;line-height:14px;min-width:26px;text-align:center;
+    padding:0 3px;border-radius:4px;border:1px solid var(--border,#2a3140);color:var(--tm,#8b93a5);cursor:pointer}
+  #claude-lsh .lsh-mode:hover{color:var(--tw,#fff);border-color:var(--tm,#8b93a5)}
+  #claude-lsh .lsh-mode.on{color:var(--accent,#4c8dff);border-color:var(--accent,#4c8dff);background:rgba(76,141,255,.12)}
   #claude-lsh .lsh-body{padding:4px 0}
   #claude-lsh.lsh-collapsed .lsh-body{display:none}
   #claude-lsh .lsh-row{padding:7px 10px;border-bottom:1px solid rgba(255,255,255,.05)}
   #claude-lsh .lsh-row:last-child{border-bottom:none}
-  #claude-lsh .lsh-r1{display:flex;align-items:baseline;justify-content:space-between;gap:6px}
-  #claude-lsh .lsh-name{font-weight:700;color:var(--tm,#8b93a5);font-size:11px}
+  #claude-lsh .lsh-r1{display:flex;align-items:center;gap:5px}
+  #claude-lsh .lsh-name{font-weight:700;color:var(--tm,#8b93a5);font-size:11px;flex:1;min-width:0;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* Сворачивание строк: 8 связок × 5 линий = стена цифр, в которой не найти нужную.
+     Свёрнутая строка = имя + спред + свежесть, одна линия. Разворачивается кликом. */
+  #claude-lsh .lsh-r1{cursor:pointer;user-select:none}
+  #claude-lsh .lsh-r1:hover .lsh-name{color:var(--tw,#fff)}
+  #claude-lsh .lsh-chev{font-size:9px;color:var(--tm,#8b93a5);opacity:.6;margin-right:4px;display:inline-block;width:8px}
+  #claude-lsh .lsh-row.lsh-fold .lsh-px, #claude-lsh .lsh-row.lsh-fold .lsh-meta{display:none}
+  #claude-lsh .lsh-row.lsh-fold{padding:4px 10px}
+  /* значение шапки — последним и вправо: стоит в одной колонке со значениями строк цен (−4px = их padding) */
+  #claude-lsh .lsh-hpct{flex:none;font-weight:700;font-size:12px;font-variant-numeric:tabular-nums;min-width:66px;text-align:right;margin-right:4px}
   #claude-lsh .lsh-mid{font-size:17px;font-weight:800;font-variant-numeric:tabular-nums}
-  #claude-lsh .lsh-dots{display:flex;gap:3px;align-items:center;margin-left:auto}
+  #claude-lsh .lsh-dots{flex:none;display:flex;gap:3px;align-items:center}
   #claude-lsh .lsh-dot{width:7px;height:7px;border-radius:50%;display:inline-block}
   #claude-lsh .lsh-dir{font-size:10.5px;color:var(--tl,#c3cad8);margin-top:2px}
   #claude-lsh .lsh-px{font-size:13px;color:var(--tw,#ffffff);margin-top:3px;font-weight:600;font-variant-numeric:tabular-nums;
@@ -108,31 +125,42 @@
   // Сверять на /update-all. v1 — валютные перп-тройки; v2 (2026-08-06) — квартальный
   // тройничок Si/Cr (calcTriple@6372: synthetic=(Si/1000)/CR): l1div — нормировка l1,
   // snap — id инпутов таба для Δ vs 🔄. ⚠ ФРОНТ-КОНТРАКТЫ ОБНОВЛЯТЬ РУКАМИ при перекладке.
+  // ⚠ В подписях строк месяц контракта («Si-12») зашит текстом — при перекладке править вместе
+  //   с тикерами, иначе строка будет врать про серию.
   // 2026-08-28: U6 → Z6 (Si-12.26 / CNY-12.26, экспирация 17.12.2026) — юзер уже перевернулся
   // в Z6 27.08, а HUD ещё смотрел на SiU6/CRU6 (экспирация 17.09) и показывал чужой спред.
   // Следующая перекладка — к марту: Z6 → H7.
   var PERPS = window.LSH_PERPS = [
-    { key:'PERP_UCNH', prefix:'pu', short:'UC · USDRUBF/CNYRUBF', l1:'USDRUBF', l2:'CNYRUBF', fx:'USD/CNH' },
-    { key:'PERP_ECNH', prefix:'pe', short:'EC · EURRUBF/CNYRUBF', l1:'EURRUBF', l2:'CNYRUBF', fx:'EUR/CNH' },
-    { key:'PERP_EU',   prefix:'pr', short:'EU · EURRUBF/USDRUBF', l1:'EURRUBF', l2:'USDRUBF', fx:'EUR/USD' },
-    { key:'TRIPLE',    prefix:'tr', short:'Si/Cr · Si12/CNY12',    l1:'SiZ6',    l2:'CRZ6',    fx:'USD/CNH',
+    { key:'PERP_UCNH', prefix:'pu', short:'USDRUBF / CNYRUBF / USDCNH', l1:'USDRUBF', l2:'CNYRUBF', fx:'USD/CNH' },
+    { key:'PERP_ECNH', prefix:'pe', short:'EURRUBF / CNYRUBF / EURCNH', l1:'EURRUBF', l2:'CNYRUBF', fx:'EUR/CNH' },
+    { key:'PERP_EU',   prefix:'pr', short:'EURRUBF / USDRUBF / EURUSD', l1:'EURRUBF', l2:'USDRUBF', fx:'EUR/USD' },
+    { key:'TRIPLE',    prefix:'tr', short:'Si-12 / CR-12 / USDCNH',    l1:'SiZ6',    l2:'CRZ6',    fx:'USD/CNH',
       l1div:1000, snap:['trSi','trCr','trFx'] },
     // v3 (2026-09-15): ГИБРИДЫ «квартальник × вечник» — та же формула (l1/l1div)/l2 vs fx,
     // просто ноги из разных серий. Таба в калькуляторе у них нет → snap:[] (Δ vs 🔄 не рисуется,
     // inpVal(undefined)=0 → spSnap=null). Новых тикеров в ISS-полл не добавляют: SiZ6/CRZ6/
     // USDRUBF/CNYRUBF уже поллятся строками выше. Контракты Z6 обновлять руками (см. выше).
-    { key:'SIQ_CNYP',  prefix:'sq', short:'Si12/CNYRUBF',          l1:'SiZ6',    l2:'CNYRUBF', fx:'USD/CNH',
+    { key:'SIQ_CNYP',  prefix:'sq', short:'Si-12 / CNYRUBF / USDCNH',          l1:'SiZ6',    l2:'CNYRUBF', fx:'USD/CNH',
       l1div:1000, snap:[] },
-    { key:'USDP_CRQ',  prefix:'uq', short:'USDRUBF/CNY12',          l1:'USDRUBF', l2:'CRZ6',    fx:'USD/CNH',
+    { key:'USDP_CRQ',  prefix:'uq', short:'USDRUBF / CR-12 / USDCNH',          l1:'USDRUBF', l2:'CRZ6',    fx:'USD/CNH',
       snap:[] },
     // 2026-09-24: ВНУТРИ-MOEX треугольник — синтетика USD/CNY из Si и CR против прямого UC.
     // Форекса тут нет вовсе, поэтому опорная нога задаётся refMoex (тикер), а не fx (пара).
     // Все три контракта по 1000 единиц, экспирация у всех 17.12.2026 → спред обязан сойтись
     // к нулю в один день. Пропорция ног 1 Si : 6.71 CR : 1 UC (коэффициент CR = сам курс
     // USD/CNY, плавает вместе с ним); целыми — 10 : 67 : 10.
-    { key:'SICR_UC',   prefix:'su', short:'Si12/CNY12 vs UC12',     l1:'SiZ6',    l2:'CRZ6',    refMoex:'UCZ6',
-      l1div:1000, snap:[] }
+    { key:'SICR_UC',   prefix:'su', short:'Si-12 / CR-12 / UC-12',     l1:'SiZ6',    l2:'CRZ6',    refMoex:'UCZ6',
+      l1div:1000, snap:[] },
+    // 2026-09-24: юаневый базис — квартальник против вечника. Нога всего ДВЕ, поэтому l2 нет
+    // (в расчёте её заменяет единица, в рендере сегмент пропускается).
+    { key:'CRQ_CNYP',  prefix:'cq', short:'CR-12 / CNYRUBF',           l1:'CRZ6',    refMoex:'CNYRUBF', snap:[] }
   ];
+
+  // Что развёрнуто — переживает перезагрузку. По умолчанию всё свёрнуто.
+  var FOLD_KEY = 'lsh_open_rows_v1';
+  var openRows = {};
+  try { openRows = JSON.parse(localStorage.getItem(FOLD_KEY) || '{}') || {}; } catch(e){}
+  function saveFold(){ try { localStorage.setItem(FOLD_KEY, JSON.stringify(openRows)); } catch(e){} }
 
   var fxCache = {};            // symbol -> {bid,ask,at}
   var moexPoll = {};           // ticker -> {bid,ask,last,at} — свой активный ISS-поллинг (floor свежести)
@@ -273,7 +301,7 @@
 
   function pollMoex(){ return; // standalone: данные пишет внешний слой (template.html)
     if (moexInFlight) return;
-    var tks = {}; PERPS.forEach(function(p){ tks[p.l1]=1; tks[p.l2]=1; if(p.refMoex) tks[p.refMoex]=1; });
+    var tks = {}; PERPS.forEach(function(p){ tks[p.l1]=1; if(p.l2) tks[p.l2]=1; if(p.refMoex) tks[p.refMoex]=1; });
     var list = Object.keys(tks);
     moexInFlight = true;
     // CT_BASE + '/?t=' → docker переписывает воркер-URL на /proxy → /proxy/?t= (direct ISS + T-Invest overlay);
@@ -304,8 +332,12 @@
     return m ? { bid:m.bid, ask:m.ask, mid:m.mid, buy:m.bid, sell:m.ask, ageMs:m.ageMs, book:m.book } : null;
   }
 
+  // Нейтральная «нога-единица» для двухногих строк (базис: квартальник против вечника):
+  // формула (l1/l2)/ref вырождается в l1/ref, деления на неё ничего не меняют.
+  var UNIT = { mid:1, bid:1, ask:1, ageMs:0, book:true };
+
   function computeRow(p){
-    var l1 = moexLeg(p.l1), l2 = moexLeg(p.l2);
+    var l1 = moexLeg(p.l1), l2 = p.l2 ? moexLeg(p.l2) : UNIT;
     var fx = p.refMoex ? moexRef(moexLeg(p.refMoex)) : fxLeg(p.fx);
     var out = { l1:l1, l2:l2, fx:fx, ok:false };
     if (!l1 || !l2 || !fx) return out;
@@ -347,14 +379,19 @@
     return 'var(--red,#e5484d)';
   }
   function fmtAge(ms){ var s = ms/1000; return s < 90 ? (s<10 ? s.toFixed(1)+'с' : Math.round(s)+'с') : Math.round(s/60)+'м'; }
-  function sp(v){ return (v>=0?'+':'') + v.toFixed(3) + '%'; }
+  // Галочка «×100» у КАЖДОЙ строки (по умолчанию выкл): спред индексом (l1/l2/fx)*100 = 100 +
+  // отклонение, как график TradingView с формулой «…*100» без «−1». Считаем всегда отклонение —
+  // индекс лишь сдвиг на 100, поэтому Δ в пп и цвета по знаку одинаковы в обоих видах.
+  // Состояние — st.idx {key:1} в LS_KEY.
+  var idxRows = {};
+  function sp(v, idx){ return idx ? (100 + v).toFixed(3) : (v>=0?'+':'') + v.toFixed(3) + '%'; }
   function px(v){ return v>=1000 ? v.toFixed(0) : v>=100 ? v.toFixed(2) : v>=10 ? v.toFixed(3) : v.toFixed(5); }
   // Стрелка направления возле цены: buy=↑ зелёная, sell=↓ красная.
   function arw(buy){ return '<span class="lsh-arw" style="color:'+(buy?'var(--green,#30d158)':'var(--red,#e5484d)')+'">'+(buy?'↑':'↓')+'</span>'; }
   // % строки (= значение копируемой формулы), справа, цвет по знаку; ⏸ при устаревшем фиде.
-  function pctSpan(v, stale){
+  function pctSpan(v, stale, idx){
     var c = stale ? 'var(--red,#e5484d)' : (v>=0 ? 'var(--green,#30d158)' : 'var(--orange,#f5a623)');
-    return '<span class="lsh-pct" style="color:'+c+'">'+(stale?'⏸':'')+sp(v)+'</span>';
+    return '<span class="lsh-pct" style="color:'+c+'">'+(stale?'⏸':'')+sp(v, idx)+'</span>';
   }
 
   function copyToClipboard(text){
@@ -379,9 +416,15 @@
     var rowsHtml = '';
     var anyLive = false, allFresh = true;
     for (var i=0;i<PERPS.length;i++){
-      var p = PERPS[i], row = computeRow(p);
+      var p = PERPS[i], row = computeRow(p), IDX = !!idxRows[p.key];
+      var idxCb = '<span class="lsh-mode'+(IDX?' on':'')+'" data-idx="'+p.key+'" title="'
+        + (IDX ? 'Сейчас: индекс (l1/l2/fx)*100, вокруг 100. Клик — показать отклонением (…-1)*100.'
+               : 'Сейчас: отклонение (l1/l2/fx-1)*100, вокруг 0. Клик — показать индексом (…)*100.')
+        + ' Меняет и числа, и копируемую формулу.">'+(IDX?'×100':'%')+'</span>';
       var d1 = dotColor(row.l1,false), d2 = dotColor(row.l2,false), df = dotColor(row.fx,true);
-      var dots = '<span class="lsh-dots" title="свежесть: '+p.l1+' / '+p.l2+' / '+p.fx+'">'
+      var open = !!openRows[p.key];
+      var chev = '<span class="lsh-chev">'+(open?'▾':'▸')+'</span>';
+      var dots = '<span class="lsh-dots" title="свежесть: '+p.l1+(p.l2 ? ' / '+p.l2 : '')+' / '+(p.refMoex||p.fx)+'">'
         + '<span class="lsh-dot" style="background:'+d1+'"></span>'
         + '<span class="lsh-dot" style="background:'+d2+'"></span>'
         + '<span class="lsh-dot" style="background:'+df+'"></span></span>';
@@ -389,7 +432,7 @@
         var miss = [];
         if (!row.l1 || !row.l2) miss.push('MOEX: нет данных (relay недоступен)');
         if (!row.fx) miss.push('форекс: нет данных (TradingView)');
-        rowsHtml += '<div class="lsh-row"><div class="lsh-r1"><span class="lsh-name">'+p.short+'</span>'+dots+'</div>'
+        rowsHtml += '<div class="lsh-row" data-key="'+p.key+'"><div class="lsh-r1">'+chev+'<span class="lsh-name">'+p.short+'</span>'+dots+'</div>'
           + '<div class="lsh-dead">'+ (miss.join(' · ') || 'нет данных') +'</div></div>';
         allFresh = false;
         continue;
@@ -399,20 +442,25 @@
       // Обе стороны сделки, цены по ЛИМИТКАМ (Short→ask, Buy→bid), со стрелками + своим %:
       //  A: Short l1 (ask↓) · Buy l2 (bid↑) · Buy FX (bid↑)
       //  B: Buy l1 (bid↑) · Sell l2 (ask↓) · Sell FX (ask↓)
-      var rowA = px(row.l1.ask)+arw(0)+' / '+px(row.l2.bid)+arw(1)+' / '+px(row.fx.buy)+arw(1);
-      var rowB = px(row.l1.bid)+arw(1)+' / '+px(row.l2.ask)+arw(0)+' / '+px(row.fx.sell)+arw(0);
+      var s2A = p.l2 ? ' / '+px(row.l2.bid)+arw(1) : '';
+      var s2B = p.l2 ? ' / '+px(row.l2.ask)+arw(0) : '';
+      var rowA = px(row.l1.ask)+arw(0)+s2A+' / '+px(row.fx.buy)+arw(1);
+      var rowB = px(row.l1.bid)+arw(1)+s2B+' / '+px(row.fx.sell)+arw(0);
       // Формула копирования зашита в data-copy из ТЕХ ЖЕ цен, что показаны → «что вижу, то копирую».
       // Для квартальных троек (l1div>1) в формулу входит нормировка «/ 1000» — цены остаются биржевыми.
       var dv = (p.l1div && p.l1div !== 1) ? ' / '+p.l1div : '';
-      var copyA = '('+px(row.l1.ask)+dv+' / '+px(row.l2.bid)+' / '+px(row.fx.buy)+'-1)*100';
-      var copyB = '('+px(row.l1.bid)+dv+' / '+px(row.l2.ask)+' / '+px(row.fx.sell)+'-1)*100';
-      var pxA = '<div class="lsh-px" data-copy="'+copyA+'" title="Short '+p.l1+' ↓ask · Buy '+p.l2+' ↑bid · Buy FX ↑bid (лимитки). % = (l1/l2/fx-1)*100. Клик — копировать.">'+rowA+' <span class="lsh-cp">⎘</span>'+pctSpan(row.spA,row.stale)+'</div>';
-      var pxB = '<div class="lsh-px" data-copy="'+copyB+'" title="Buy '+p.l1+' ↑bid · Sell '+p.l2+' ↓ask · Sell FX ↓ask (лимитки). % = (l1/l2/fx-1)*100. Клик — копировать.">'+rowB+' <span class="lsh-cp">⎘</span>'+pctSpan(row.spB,row.stale)+'</div>';
+      var tail = IDX ? ')*100' : '-1)*100';
+      var copyA = '('+px(row.l1.ask)+dv+(p.l2 ? ' / '+px(row.l2.bid) : '')+' / '+px(row.fx.buy)+tail;
+      var copyB = '('+px(row.l1.bid)+dv+(p.l2 ? ' / '+px(row.l2.ask) : '')+' / '+px(row.fx.sell)+tail;
+      var fTip = IDX ? '(l1/l2/fx)*100' : '(l1/l2/fx-1)*100';
+      var pxA = '<div class="lsh-px" data-copy="'+copyA+'" title="Short '+p.l1+' ↓ask · Buy '+p.l2+' ↑bid · Buy FX ↑bid (лимитки). Спред = '+fTip+'. Клик — копировать.">'+rowA+' <span class="lsh-cp">⎘</span>'+pctSpan(row.spA,row.stale,IDX)+'</div>';
+      var pxB = '<div class="lsh-px" data-copy="'+copyB+'" title="Buy '+p.l1+' ↑bid · Sell '+p.l2+' ↓ask · Sell FX ↓ask (лимитки). Спред = '+fTip+'. Клик — копировать.">'+rowB+' <span class="lsh-cp">⎘</span>'+pctSpan(row.spB,row.stale,IDX)+'</div>';
       var deltaTxt = (row.spSnap!=null)
         ? 'Δ vs 🔄 '+((row.spMid-row.spSnap)>=0?'+':'')+(row.spMid-row.spSnap).toFixed(3)+'пп'
         : '';
-      rowsHtml += '<div class="lsh-row">'
-        + '<div class="lsh-r1"><span class="lsh-name">'+p.short+'</span>'+dots+'</div>'
+      rowsHtml += '<div class="lsh-row'+(open?'':' lsh-fold')+'" data-key="'+p.key+'">'
+        + '<div class="lsh-r1">'+chev+'<span class="lsh-name" title="'+p.short+'">'+p.short+'</span>'
+        + dots + idxCb + '<span class="lsh-hpct">'+pctSpan(row.spMid,row.stale,IDX)+'</span></div>'
         + pxA + pxB
         + '<div class="lsh-meta">'+deltaTxt+' · '+fmtAge(row.maxAge)
         + (row.fx && row.fx.tickAge > FX_FRESH_MS ? ' · fx-тик '+fmtAge(row.fx.tickAge)+' (цена не менялась)' : '')
@@ -420,6 +468,26 @@
         + '</div>';
     }
     body.innerHTML = rowsHtml;
+    // клик по шапке строки → развернуть/свернуть
+    var heads = body.querySelectorAll('.lsh-row[data-key] > .lsh-r1');
+    for (var h=0;h<heads.length;h++){
+      heads[h].onclick = function(){
+        var k = this.parentNode.getAttribute('data-key');
+        if (openRows[k]) delete openRows[k]; else openRows[k] = 1;
+        saveFold(); render();
+      };
+    }
+
+    // плашка вида спреда строки: клик переключает %/×100 и НЕ сворачивает строку
+    var cbs = body.querySelectorAll('.lsh-mode[data-idx]');
+    for (var c=0;c<cbs.length;c++){
+      cbs[c].addEventListener('click', function(e){
+        e.stopPropagation();
+        var k = this.getAttribute('data-idx');
+        if (idxRows[k]) delete idxRows[k]; else idxRows[k] = 1;
+        st.idx = idxRows; saveState(st); render();
+      });
+    }
     // клик по строке цен → копировать 3 цены в буфер (read-only)
     var pxEls = body.querySelectorAll('.lsh-px[data-copy]');
     for (var b=0;b<pxEls.length;b++){
@@ -437,6 +505,7 @@
   var st = loadState();
   function applyCollapsed(c){ el.classList.toggle('lsh-collapsed', c); caret.textContent = c?'▸':'▾'; }
   applyCollapsed(!!st.collapsed);   // по умолчанию развёрнут; свёрнутость помнится в localStorage
+  idxRows = (st.idx && typeof st.idx === 'object') ? st.idx : {};   // старый глобальный true → сброс
   el.querySelector('.lsh-hd').addEventListener('click', function(){
     var c = !el.classList.contains('lsh-collapsed');
     applyCollapsed(c); st.collapsed = c; saveState(st);
